@@ -1,0 +1,27 @@
+# Copy this file to config.yaml and edit freely. config.yaml is gitignored;
+# this file is the committed template.
+
+# How far back to search for new stories.
+lookback_days: 3
+
+# How far back to look when checking for stories already told, to avoid repeats.
+history_days: 7
+
+# commentary: none | context | analysis
+#   none     - no additions beyond what the sources state
+#   context  - brief background is allowed
+#   analysis - reasoned interpretation is allowed, still grounded in sources
+topics:
+  - name: Formula 1
+    focus: race results, standings, driver and team news, calendar changes
+    commentary: none
+  - name: Big tech
+    focus: product launches, regulation and antitrust, AI industry moves, major corporate news
+    commentary: none
+  - name: Finance
+    focus: markets, interest rates, notable company earnings and corporate finance news
+    commentary: none
+
+sites:
+  - https://www.wired.com
+  - https://arstechnica.com

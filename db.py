@@ -1,10 +1,11 @@
+import os
 import sqlite3
 from contextlib import closing
 from datetime import date, timedelta
 from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit, parse_qsl, urlencode
 
-DB_PATH = Path(__file__).parent / "digest.db"
+DB_PATH = Path(os.environ.get("DIGEST_DB") or (Path(__file__).parent / "digest.db"))
 
 def get_conn() -> sqlite3.Connection:
     conn = sqlite3.connect(DB_PATH)

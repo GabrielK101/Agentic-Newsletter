@@ -1,6 +1,7 @@
 from dotenv import load_dotenv
 from registry import tool
 from datetime import datetime, timezone, timedelta
+from email.utils import parsedate_to_datetime
 from bs4 import BeautifulSoup
 from urllib.parse import urljoin
 from trafilatura import fetch_url, extract
@@ -101,10 +102,21 @@ def fetch_article(url: str) -> str:
 
     article = {
         "title": data.get("title", ""),
-        "text": data.get("text", "")[:4000],   
+        "text": data.get("text", "")[:4000],
+        "published": data.get("date"),  # trafilatura's best-guess date, YYYY-MM-DD, or null
     }
 
     return json.dumps(article)
+
+def _to_date(rfc2822_date):
+    """Normalize Tavily's RFC 2822 published_date (e.g. "Tue, 11 Mar 2025
+    17:00:00 GMT") to YYYY-MM-DD, or None if missing/unparseable."""
+    if not rfc2822_date:
+        return None
+    try:
+        return parsedate_to_datetime(rfc2822_date).strftime("%Y-%m-%d")
+    except (TypeError, ValueError):
+        return None
 
 @tool
 def search_web(query: str, search_depth: str = "basic", max_results: int = 5, days: int = 3) -> str:
@@ -131,7 +143,8 @@ def search_web(query: str, search_depth: str = "basic", max_results: int = 5, da
             "title": result.get("title", ""),
             "link": result.get("url", ""),
             "summary": result.get("content", "")[:300],
-            "score": result.get("score")
+            "score": result.get("score"),
+            "published": _to_date(result.get("published_date")),
         })
 
     if not results:

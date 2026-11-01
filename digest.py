@@ -5,6 +5,7 @@ answers (stop_reason == "end_turn") or asks for tools (stop_reason == "tool_use"
 We run whatever it asks for, send the results back, and go round again.
 """
 import json
+import os
 import sys
 from datetime import date, datetime, timedelta
 
@@ -21,6 +22,10 @@ from storage import sync_down, sync_up
 load_dotenv()
 
 DRY_RUN = "--dry-run" in sys.argv[1:]
+SEND = "--send" in sys.argv[1:]
+
+if SEND:
+    os.environ["DIGEST_DELIVERY"] = "email"  # overrides DIGEST_DELIVERY=local
 
 MODEL = "claude-sonnet-4-6"
 MAX_TURNS = 10      # hard stop so a confused run can't loop (and bill) forever
@@ -29,14 +34,6 @@ MAX_TOKENS = 2500
 # For the end-of-run cost estimate. Update if pricing changes.
 PRICE_IN_PER_M = 3.0
 PRICE_OUT_PER_M = 15.0
-
-# Per-run input, all from config.yaml (path from env DIGEST_CONFIG).
-CONFIG = load_config()
-LOOKBACK_DAYS = CONFIG["lookback_days"]    # how far back to search for new stories
-HISTORY_DAYS = CONFIG["history_days"]      # how far back to check for stories already told
-TOPICS = CONFIG["topics"]                  # list of {"name", "focus", "commentary"}
-TOPIC_NAMES = [t["name"] for t in TOPICS]
-SITES = CONFIG["sites"]
 
 # Static: the same on every run. Nothing user-typed goes in here.
 SYSTEM = """You are a news editor building a daily digest for one reader.
@@ -101,13 +98,13 @@ a headline and a search snippet don't support more, and don't pad it with
 filler about other companies or events the snippet didn't actually cover."""
 
 
-def build_request(history: list[dict]) -> str:
+def build_request(config: dict, history: list[dict]) -> str:
     today = datetime.now().strftime("%A %d %B %Y")
     topics = "\n".join(
         f"- {t['name']} (focus: {t['focus']}; commentary: {t['commentary']})"
-        for t in TOPICS
+        for t in config["topics"]
     )
-    sites = "\n".join(f"- {s}" for s in SITES)
+    sites = "\n".join(f"- {s}" for s in config["sites"])
 
     if history:
         told_lines = "\n".join(
@@ -119,17 +116,17 @@ def build_request(history: list[dict]) -> str:
         told_lines = "(none)"
 
     return (
-        f"Today is {today}. Build my digest from roughly the last {LOOKBACK_DAYS} days.\n\n"
+        f"Today is {today}. Build my digest from roughly the last {config['lookback_days']} days.\n\n"
         f"Topics:\n{topics}\n\n"
         f"Sites to check:\n{sites}\n\n"
-        f"Already told (last {HISTORY_DAYS} days):\n{told_lines}"
+        f"Already told (last {config['history_days']} days):\n{told_lines}"
     )
 
 
-def run_agent(history: list[dict]) -> tuple[str, bool, dict]:
+def run_agent(config: dict, history: list[dict]) -> tuple[str, bool, dict]:
     """Run the tool-use loop. Returns (final_text, hit_max_turns, usage)."""
     client = anthropic.Anthropic()
-    messages = [{"role": "user", "content": build_request(history)}]
+    messages = [{"role": "user", "content": build_request(config, history)}]
     usage = {"input_tokens": 0, "output_tokens": 0}
 
     for turn in range(1, MAX_TURNS + 1):
@@ -157,9 +154,9 @@ def run_agent(history: list[dict]) -> tuple[str, bool, dict]:
             if block.type == "tool_use":
                 args = dict(block.input)
                 if block.name == "read_feed":
-                    args["hours"] = LOOKBACK_DAYS * 24
+                    args["hours"] = config["lookback_days"] * 24
                 elif block.name == "search_web":
-                    args["days"] = LOOKBACK_DAYS
+                    args["days"] = config["lookback_days"]
                 print(f"[turn {turn}] {block.name}({args})")
                 output = run_tool(block.name, args)
                 results.append({
@@ -190,16 +187,17 @@ def parse_digest(raw_text: str) -> dict | None:
         return None
 
 
-def render_digest(stories: list[dict], history: list[dict]) -> str:
+def render_digest(config: dict, stories: list[dict], history: list[dict]) -> str:
     """Build the digest as markdown, grouped by topic."""
     history_by_id = {h["id"]: h for h in history}
+    topic_names = [t["name"] for t in config["topics"]]
 
     by_topic: dict[str, list[dict]] = {}
     for story in stories:
         by_topic.setdefault(story.get("topic"), []).append(story)
 
     lines = []
-    for topic in TOPIC_NAMES:
+    for topic in topic_names:
         topic_stories = by_topic.get(topic)
         if not topic_stories:
             continue
@@ -227,11 +225,21 @@ def render_digest(stories: list[dict], history: list[dict]) -> str:
 
 
 if __name__ == "__main__":
+    config = load_config()
+
+    for topic in config["topics"]:
+        if topic["commentary"] != "none":
+            print(
+                f"[warning] commentary '{topic['commentary']}' for topic "
+                f"'{topic['name']}' isn't implemented yet; treating it as 'none'."
+            )
+            topic["commentary"] = "none"
+
     sync_down()
     init_db()
-    history = recent_stories(HISTORY_DAYS)
+    history = recent_stories(config["history_days"])
 
-    raw_text, hit_max_turns, usage = run_agent(history)
+    raw_text, hit_max_turns, usage = run_agent(config, history)
     if hit_max_turns:
         print(raw_text)
         sys.exit(1)
@@ -241,7 +249,7 @@ if __name__ == "__main__":
         print(raw_text)
         sys.exit(1)
 
-    cutoff = (date.today() - timedelta(days=LOOKBACK_DAYS)).isoformat()
+    cutoff = (date.today() - timedelta(days=config["lookback_days"])).isoformat()
     stories = []
     for story in digest.get("stories", []):
         published = story.get("published")
@@ -263,7 +271,7 @@ if __name__ == "__main__":
             )
         sync_up()
 
-    rendered = render_digest(stories, history)
+    rendered = render_digest(config, stories, history)
     deliver(rendered, stories)
 
     notes = digest.get("notes", "").strip()

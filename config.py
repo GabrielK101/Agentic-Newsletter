@@ -5,32 +5,61 @@ from pathlib import Path
 import yaml
 
 _VALID_COMMENTARY = {"none", "context", "analysis"}
+_TOP_LEVEL_KEYS = {"lookback_days", "history_days", "topics", "sites"}
+_TOPIC_KEYS = {"name", "focus", "commentary"}
 
 
-def load_config() -> dict:
-    """Load and validate the run config. Path from env DIGEST_CONFIG, else ./config.yaml."""
-    path = Path(os.environ.get("DIGEST_CONFIG", "config.yaml"))
+def load_config(path: str | None = None) -> dict:
+    """Load and validate the run config.
+
+    Path order: the `path` argument, then env DIGEST_CONFIG, then
+    config.yaml next to this file.
+    """
+    if path is None:
+        path = os.environ.get("DIGEST_CONFIG")
+    if path is None:
+        path = Path(__file__).parent / "config.yaml"
+    path = Path(path)
+
+    if not path.exists():
+        raise ValueError(
+            f"config file not found at {path}. Copy config.example.yaml to "
+            f"{path.name} and edit it."
+        )
+
     with open(path, "r", encoding="utf-8") as f:
         raw = yaml.safe_load(f)
 
     if not isinstance(raw, dict):
         raise ValueError(f"config at {path} must be a mapping, got {type(raw).__name__}")
 
-    _require(raw, "lookback_days", int)
-    _require(raw, "history_days", int)
-    _require(raw, "topics", list)
-    _require(raw, "sites", list)
+    unknown = set(raw) - _TOP_LEVEL_KEYS
+    if unknown:
+        raise ValueError(f"config has unknown key(s): {sorted(unknown)}")
 
-    if not raw["topics"]:
-        raise ValueError("config key 'topics' must not be empty")
+    _require_int_at_least_1(raw, "lookback_days")
+    _require_int_at_least_1(raw, "history_days")
+
+    if "topics" not in raw:
+        raise ValueError("config is missing required key 'topics'")
+    if not isinstance(raw["topics"], list) or not raw["topics"]:
+        raise ValueError("config key 'topics' must be a non-empty list")
 
     for i, topic in enumerate(raw["topics"]):
         if not isinstance(topic, dict):
             raise ValueError(f"config key 'topics[{i}]' must be a mapping")
-        if not isinstance(topic.get("name"), str) or not topic["name"]:
+
+        unknown_topic_keys = set(topic) - _TOPIC_KEYS
+        if unknown_topic_keys:
+            raise ValueError(f"config key 'topics[{i}]' has unknown key(s): {sorted(unknown_topic_keys)}")
+
+        if not isinstance(topic.get("name"), str) or not topic["name"].strip():
             raise ValueError(f"config key 'topics[{i}].name' is required and must be a non-empty string")
-        if not isinstance(topic.get("focus"), str) or not topic["focus"]:
+
+        if not isinstance(topic.get("focus"), str) or not topic["focus"].strip():
             raise ValueError(f"config key 'topics[{i}].focus' is required and must be a non-empty string")
+        topic["focus"] = topic["focus"].strip()  # folded `>` strings carry trailing whitespace
+
         topic.setdefault("commentary", "none")
         if topic["commentary"] not in _VALID_COMMENTARY:
             raise ValueError(
@@ -38,18 +67,21 @@ def load_config() -> dict:
                 f"{sorted(_VALID_COMMENTARY)}, got {topic['commentary']!r}"
             )
 
+    if "sites" not in raw:
+        raise ValueError("config is missing required key 'sites'")
+    if not isinstance(raw["sites"], list):
+        raise ValueError("config key 'sites' must be a list")
+
     for i, site in enumerate(raw["sites"]):
-        if not isinstance(site, str) or not site:
-            raise ValueError(f"config key 'sites[{i}]' must be a non-empty string")
+        if not isinstance(site, str) or not site.startswith(("http://", "https://")):
+            raise ValueError(f"config key 'sites[{i}]' must be a string starting with http:// or https://")
 
     return raw
 
 
-def _require(raw: dict, key: str, expected_type: type) -> None:
+def _require_int_at_least_1(raw: dict, key: str) -> None:
     if key not in raw:
         raise ValueError(f"config is missing required key '{key}'")
-    if not isinstance(raw[key], expected_type):
-        raise ValueError(
-            f"config key '{key}' must be of type {expected_type.__name__}, "
-            f"got {type(raw[key]).__name__}"
-        )
+    value = raw[key]
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        raise ValueError(f"config key '{key}' must be an integer >= 1, got {value!r}")

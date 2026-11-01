@@ -12,16 +12,11 @@ history_days: 7
 #   context  - brief background is allowed
 #   analysis - reasoned interpretation is allowed, still grounded in sources
 topics:
-  - name: Formula 1
-    focus: race results, standings, driver and team news, calendar changes
-    commentary: none
-  - name: Big tech
-    focus: product launches, regulation and antitrust, AI industry moves, major corporate news
-    commentary: none
-  - name: Finance
-    focus: markets, interest rates, notable company earnings and corporate finance news
+  - name: Example topic
+    focus: >
+      Replace this with what you actually want covered for this topic: the
+      angle, the level of depth, and what to skip.
     commentary: none
 
 sites:
-  - https://www.wired.com
-  - https://arstechnica.com
+  - https://example.com

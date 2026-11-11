@@ -20,21 +20,31 @@ Fill in `ANTHROPIC_API_KEY` and `TAVILY_API_KEY` in `.env`, and edit `config.yam
 - `DIGEST_CONFIG` - path to the run config. Defaults to `./config.yaml`.
 - `DIGEST_DB` - path to the SQLite DB file. Defaults to `digest.db` next to `db.py`.
 - `DIGEST_STORAGE` - `local` (default, no-op), `s3`, or `gcs` (the latter two are unimplemented stubs).
-- `DIGEST_DELIVERY` - `local` (default: print + files under `digests/`), `email`, or `webhook` (the latter two are unimplemented stubs).
+- `DIGEST_DELIVERY` - `local` (default: print + files under `digests/`) or `email` (requires `GMAIL_USER`, `GMAIL_APP_PASSWORD`, `DIGEST_TO`).
 
 ## Running
 
 ```
 python digest.py
-python digest.py --dry-run   # skip saving to the DB, still write files
+python digest.py --dry-run           # skip saving to the DB, still write files
+python digest.py --send              # force email delivery for this run, overriding DIGEST_DELIVERY
+python digest.py --fixture           # skip the model and all tools; use canned stories to test rendering/delivery
+python digest.py --fixture --fixture-count N  # 1-15 canned stories instead of the default 15
+python digest.py --fixture --send    # test the actual email send, free and instant - no model calls, no DB writes
+python digest.py --no-images         # skip article image fetching for this run
 ```
+
+`--fixture` is the fast way to test email end-to-end (HTML rendering, SMTP login/send) without paying for or waiting on a real search run. Combine it with `--dry-run` so repeated test runs don't pollute the "already told" history with the fixture's fake URLs.
+
+Article images are hotlinked directly from the publisher's own site, not re-hosted - which means opening the email can let the publisher know it was opened (most email clients, including Gmail, proxy images through their own servers, which hides this from most publishers, but not all clients do). Set `images: false` in `config.yaml`, or pass `--no-images` for a single run, to turn image fetching off.
 
 ## File structure
 
 - `registry.py` - the `@tool` decorator, tool registry, and the `run_tool`/`schemas` dispatcher used by the agent loop.
 - `tools.py` - the tools themselves: `read_feed`, `find_feed`, `fetch_article`, `search_web`.
 - `digest.py` - the agent loop: calls the model with the tool schemas, executes whatever tools it asks for, parses and filters the result, and hands it off for delivery.
-- `config.py` / `config.yaml` - loads and validates the run config (lookback window, history window, topics, sites).
+- `images.py` - finds a representative article image per story, code-only (no model calls), with SSRF-safe fetching.
+- `config.py` / `config.yaml` - loads and validates the run config (lookback window, history window, topics, sites, images on/off).
 - `db.py` - SQLite storage for past stories, used to dedupe and to report follow-ups.
 - `storage.py` - syncs the DB file to/from a remote backend before/after a run (currently local-only; `s3`/`gcs` are stubs).
 - `delivery.py` - delivers the finished digest (currently local-only: stdout + dated files under `digests/`; `email`/`webhook` are stubs).

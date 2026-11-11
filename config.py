@@ -5,7 +5,7 @@ from pathlib import Path
 import yaml
 
 _VALID_COMMENTARY = {"none", "context", "analysis"}
-_TOP_LEVEL_KEYS = {"lookback_days", "history_days", "topics", "sites"}
+_TOP_LEVEL_KEYS = {"lookback_days", "history_days", "topics", "sites", "title", "tagline", "images"}
 _TOPIC_KEYS = {"name", "focus", "commentary"}
 
 
@@ -75,6 +75,19 @@ def load_config(path: str | None = None) -> dict:
     for i, site in enumerate(raw["sites"]):
         if not isinstance(site, str) or not site.startswith(("http://", "https://")):
             raise ValueError(f"config key 'sites[{i}]' must be a string starting with http:// or https://")
+
+    raw.setdefault("title", "The Daily Digest")
+    if not isinstance(raw["title"], str) or not raw["title"].strip():
+        raise ValueError(f"config key 'title' must be a non-empty string, got {raw['title']!r}")
+
+    tagline = raw.get("tagline")
+    if tagline is not None and (not isinstance(tagline, str) or not tagline.strip()):
+        raise ValueError(f"config key 'tagline' must be a non-empty string if present, got {tagline!r}")
+    raw["tagline"] = tagline
+
+    raw.setdefault("images", True)
+    if not isinstance(raw["images"], bool):
+        raise ValueError(f"config key 'images' must be true or false, got {raw['images']!r}")
 
     return raw
 

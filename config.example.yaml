@@ -20,3 +20,11 @@ topics:
 
 sites:
   - https://example.com
+
+# Masthead title and optional tagline (shown in italic under the title).
+title: The Daily Digest
+tagline: Replace with your own tagline, or remove this line
+
+# Fetch an article image for each story (hotlinked from the publisher - see
+# the README note on what that reveals to them). Set to false to turn it off.
+images: true

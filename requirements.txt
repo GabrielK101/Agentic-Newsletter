@@ -1,6 +1,7 @@
 anthropic==1.8.0
 beautifulsoup4==4.15.0
 feedparser==6.0.14
+google-cloud-storage==3.17.1
 httpx==0.28.1
 pyyaml==6.0.3
 python-dotenv==1.2.3

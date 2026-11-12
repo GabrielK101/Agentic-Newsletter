@@ -28,3 +28,6 @@ tagline: Replace with your own tagline, or remove this line
 # Fetch an article image for each story (hotlinked from the publisher - see
 # the README note on what that reveals to them). Set to false to turn it off.
 images: true
+
+# Who the email goes to. Optional - falls back to env DIGEST_TO if unset.
+# recipient: you@example.com

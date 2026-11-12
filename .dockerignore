@@ -1,0 +1,25 @@
+# Secrets and local-only config - never bake these into the image.
+.env
+.env.example
+config.yaml
+config.example.yaml
+
+# Local runtime state / dev artifacts.
+digests/
+*.db
+*.sqlite
+*.sqlite3
+.git
+.gitignore
+.venv/
+__pycache__/
+*.pyc
+tests/
+Thumbs.db
+.vscode/
+
+# Docs and build files themselves - not needed at runtime.
+README.md
+LICENSE
+Dockerfile
+.dockerignore

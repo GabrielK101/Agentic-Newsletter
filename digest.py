@@ -34,6 +34,7 @@ DRY_RUN = "--dry-run" in sys.argv[1:]
 SEND = "--send" in sys.argv[1:]
 FIXTURE = "--fixture" in sys.argv[1:]  # skip the model/tools; use canned stories
 NO_IMAGES = "--no-images" in sys.argv[1:]  # skip enrich_images for this run
+CHECK = "--check" in sys.argv[1:]  # validate config/env only; no model, tool, or email calls
 
 if FIXTURE:
     DRY_RUN = True  # fixture stories must never be able to reach the DB
@@ -97,7 +98,74 @@ def render_digest(config: dict, stories: list[dict], history: list[dict]) -> str
     return "\n".join(lines)
 
 
+def run_check() -> int:
+    """--check: validate config and environment only - no model, tool, or
+    email calls, and no writes to the local DB. Returns a process exit
+    code (0 ok, 1 if anything's wrong)."""
+    ok = True
+
+    print("[check] config:")
+    config = None
+    try:
+        config = load_config()
+        print(f"  OK - {len(config['topics'])} topic(s), lookback_days={config['lookback_days']}")
+    except ValueError as e:
+        print(f"  FAIL - {e}")
+        ok = False
+
+    print("[check] environment variables (presence only - values are never printed):")
+    required = ["ANTHROPIC_API_KEY", "TAVILY_API_KEY"]
+
+    delivery_backend = os.environ.get("DIGEST_DELIVERY", "local")
+    if delivery_backend == "email":
+        required += ["GMAIL_USER", "GMAIL_APP_PASSWORD"]
+        has_recipient = bool(os.environ.get("DIGEST_TO")) or bool(config and config.get("recipient"))
+        print(f"  {'set    ' if has_recipient else 'MISSING'} - DIGEST_TO (or config 'recipient')")
+        if not has_recipient:
+            ok = False
+
+    storage_backend = os.environ.get("DIGEST_STORAGE", "local")
+    if storage_backend == "gcs":
+        required.append("DIGEST_GCS_BUCKET")
+
+    for name in required:
+        present = bool(os.environ.get(name))
+        print(f"  {'set    ' if present else 'MISSING'} - {name}")
+        if not present:
+            ok = False
+
+    if storage_backend == "gcs" and os.environ.get("DIGEST_GCS_BUCKET"):
+        print("[check] GCS bucket:")
+        try:
+            from google.api_core.exceptions import NotFound
+            from google.cloud import storage as gcs_storage
+
+            bucket_name = os.environ["DIGEST_GCS_BUCKET"]
+            object_name = os.environ.get("DIGEST_DB_OBJECT", "digest.db")
+            bucket = gcs_storage.Client().bucket(bucket_name)
+            if not bucket.exists():
+                print(f"  FAIL - bucket gs://{bucket_name} is not reachable or does not exist")
+                ok = False
+            else:
+                print(f"  OK - bucket gs://{bucket_name} is reachable")
+                blob = bucket.blob(object_name)
+                try:
+                    blob.reload()
+                    print(f"  OK - DB object '{object_name}' exists, {blob.size} bytes")
+                except NotFound:
+                    print(f"  OK - DB object '{object_name}' does not exist yet (first run will start fresh)")
+        except Exception as e:
+            print(f"  FAIL - could not verify GCS bucket: {type(e).__name__}: {e}")
+            ok = False
+
+    print(f"\n[check] {'all checks passed' if ok else 'one or more checks failed'}")
+    return 0 if ok else 1
+
+
 if __name__ == "__main__":
+    if CHECK:
+        sys.exit(run_check())
+
     config = load_config()
 
     for topic in config["topics"]:
@@ -147,6 +215,17 @@ if __name__ == "__main__":
     for story in stories:
         story["weight"] = normalise_weight(story)  # rendering only; never stored
 
+    # Deliver BEFORE persisting. If delivery fails (send() exits non-zero
+    # internally on a failed email), nothing below runs, so no story gets
+    # marked "told" without actually reaching the reader - a retry will
+    # just pick the same stories up again. The failure mode this avoids is
+    # saving first: a crash or failed send between save and delivery would
+    # silently lose a story forever. Worst case now is the opposite and far
+    # safer - a crash between send and save can at most repeat a story in
+    # tomorrow's digest, never lose one.
+    rendered = render_digest(config, stories, history)
+    deliver(rendered, stories, title=config["title"], tagline=config["tagline"], recipient=config["recipient"])
+
     if not DRY_RUN:
         for story in stories:
             save_story(
@@ -158,9 +237,6 @@ if __name__ == "__main__":
                 image_url=story.get("image_url"),
             )
         sync_up()
-
-    rendered = render_digest(config, stories, history)
-    deliver(rendered, stories, title=config["title"], tagline=config["tagline"])
 
     notes = digest.get("notes", "").strip()
     if notes:

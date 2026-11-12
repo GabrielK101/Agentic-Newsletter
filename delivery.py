@@ -27,15 +27,16 @@ from newsletter_render import render_html, render_text
 load_dotenv()
 
 
-def deliver(markdown: str, stories: list[dict],
-            title: str = "The Daily Digest", tagline: str | None = None) -> None:
-    """Deliver the rendered digest and its stories."""
+def deliver(markdown: str, stories: list[dict], title: str = "The Daily Digest",
+            tagline: str | None = None, recipient: str | None = None) -> None:
+    """Deliver the rendered digest and its stories. `recipient` (email
+    backend only) falls back to env DIGEST_TO if not given."""
     backend = os.environ.get("DIGEST_DELIVERY", "local")
     if backend == "local":
         _deliver_local(markdown, stories, title, tagline)
         return
     if backend == "email":
-        _deliver_email(markdown, stories, title, tagline)
+        _deliver_email(markdown, stories, title, tagline, recipient)
         return
     raise NotImplementedError(f"Unknown DIGEST_DELIVERY backend '{backend}'.")
 
@@ -80,7 +81,8 @@ def _deliver_local(markdown: str, stories: list[dict], title: str, tagline: str 
     print(f"[saved] {html_path}")
 
 
-def _deliver_email(markdown: str, stories: list[dict], title: str, tagline: str | None) -> None:
+def _deliver_email(markdown: str, stories: list[dict], title: str,
+                    tagline: str | None, recipient: str | None) -> None:
     if not stories:
         print("No new stories, email skipped")
         return
@@ -92,16 +94,17 @@ def _deliver_email(markdown: str, stories: list[dict], title: str, tagline: str 
 
     text = render_text(stories)
     subject = f"Daily digest {date.today().isoformat()}: {len(stories)} stories"
-    msg = build_message(subject, text, html_content)
+    to_addr = recipient or os.environ.get("DIGEST_TO")
+    msg = build_message(subject, text, html_content, to_addr)
     send(msg)  # already saved above, so a failed send loses nothing
     print("[sent] digest emailed")
 
 
-def build_message(subject: str, text: str, html_content: str) -> EmailMessage:
+def build_message(subject: str, text: str, html_content: str, to_addr: str | None = None) -> EmailMessage:
     msg = EmailMessage()
     msg["Subject"] = subject
     msg["From"] = os.environ.get("GMAIL_USER")
-    msg["To"] = os.environ.get("DIGEST_TO")
+    msg["To"] = to_addr or os.environ.get("DIGEST_TO")
     msg.set_content(text)
     msg.add_alternative(html_content, subtype="html")
     return msg

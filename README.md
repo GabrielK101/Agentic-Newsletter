@@ -18,9 +18,14 @@ Fill in `ANTHROPIC_API_KEY` and `TAVILY_API_KEY` in `.env`, and edit `config.yam
 
 - `ANTHROPIC_API_KEY`, `TAVILY_API_KEY` - required.
 - `DIGEST_CONFIG` - path to the run config. Defaults to `./config.yaml`.
-- `DIGEST_DB` - path to the SQLite DB file. Defaults to `digest.db` next to `db.py`.
-- `DIGEST_STORAGE` - `local` (default, no-op), `s3`, or `gcs` (the latter two are unimplemented stubs).
-- `DIGEST_DELIVERY` - `local` (default: print + files under `digests/`) or `email` (requires `GMAIL_USER`, `GMAIL_APP_PASSWORD`, `DIGEST_TO`).
+- `DIGEST_DB` - path to the SQLite DB file. Defaults to `digest.db` next to `db.py` (in the container: `/tmp/digest.db`).
+- `DIGEST_STORAGE` - `local` (default, no-op), `gcs`, or `s3` (the latter is an unimplemented stub). `gcs` also needs:
+  - `DIGEST_GCS_BUCKET` - required when `DIGEST_STORAGE=gcs`.
+  - `DIGEST_DB_OBJECT` - object name within the bucket. Defaults to `digest.db`.
+  - `DIGEST_ARCHIVE` - `true` to also upload each run's saved `.md`/`.json`/`.html` to `gs://<bucket>/digests/`. Defaults off.
+  - Auth is Application Default Credentials only - no key files. On GCP compute this is automatic; locally, `gcloud auth application-default login`.
+- `DIGEST_DELIVERY` - `local` (default: print + files under `digests/`) or `email` (requires `GMAIL_USER`, `GMAIL_APP_PASSWORD`, and a recipient - see `DIGEST_TO` below).
+- `DIGEST_TO` - who the email goes to. Overridable per-config with `recipient` in `config.yaml` (`DIGEST_TO` is the fallback if that's unset).
 
 ## Running
 
@@ -32,7 +37,10 @@ python digest.py --fixture           # skip the model and all tools; use canned 
 python digest.py --fixture --fixture-count N  # 1-15 canned stories instead of the default 15
 python digest.py --fixture --send    # test the actual email send, free and instant - no model calls, no DB writes
 python digest.py --no-images         # skip article image fetching for this run
+python digest.py --check             # validate config/env only - no model, tool, or email calls; exits non-zero on any problem
 ```
+
+**Delivery happens before the DB is updated.** If sending fails, nothing gets marked "told" - a retry picks the same stories up again. A crash between send and save can at worst repeat a story in the next digest; it can never silently lose one.
 
 `--fixture` is the fast way to test email end-to-end (HTML rendering, SMTP login/send) without paying for or waiting on a real search run. Combine it with `--dry-run` so repeated test runs don't pollute the "already told" history with the fixture's fake URLs.
 
@@ -52,6 +60,17 @@ Article images are hotlinked directly from the publisher's own site, not re-host
 - `delivery.py` - delivery mechanics: saves files, builds and sends the email.
 - `newsletter_render.py` - the HTML/text layout engine that turns stories into the rendered digest.
 - `tests/` - standalone test scripts, each runnable directly (no test runner required): `test_db.py`, `test_images.py`.
+- `config.prod.yaml` - committed, non-secret production config baked into the Docker image.
+- `Dockerfile` / `.dockerignore` - container image for running the job on a schedule. Not deployed anywhere yet.
+
+## Docker
+
+```
+docker build -t news-digest .
+docker run --rm --env-file .env -e DIGEST_STORAGE=local news-digest --fixture
+```
+
+The image runs as a non-root user, uses `config.prod.yaml` (`DIGEST_CONFIG=config.prod.yaml`), and defaults to `DIGEST_STORAGE=gcs` with `DIGEST_DB=/tmp/digest.db`. The entrypoint is fixed (`python digest.py`) with a default arg of `--send` - a real email send - so `docker run news-digest` alone sends for real; pass different args after the image name (as above, to `--fixture`, free and instant) to override just that, without repeating "python digest.py". The storage backend is also overridden to `local` in the example above, since there's no real GCS bucket to sync against. Run `docker run --rm --env-file .env news-digest --check` (or `python digest.py --check` locally) to validate config and required env vars - including GCS bucket reachability when `DIGEST_STORAGE=gcs` - without any model, tool, or email calls. This split (`ENTRYPOINT`/`CMD` rather than one `CMD`) is also what lets Cloud Run jobs override the args per-execution without touching the image.
 
 ## Tests
 
@@ -66,4 +85,5 @@ Both are self-contained (no network access, no real `digest.db` touched) and pri
 
 - FastAPI + React UI
 - MCP server wrapping the tools, for follow-up Q&A
-- Real `s3`/`gcs` storage backends and `email`/`webhook` delivery backends
+- An `s3` storage backend and a `webhook` delivery backend
+- Actually deploy the container somewhere on a schedule (Cloud Run Jobs + Cloud Scheduler, most likely)

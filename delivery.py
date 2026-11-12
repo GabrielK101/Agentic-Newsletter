@@ -43,6 +43,12 @@ _HERO_GAP = 8    # vertical space between the hero's headline/summary/read-more
 _IMAGE_GAP = 10  # space below every image, before whatever follows it
 
 MAX_CARDS = 9    # hero included - at most 8 more cards in the grid
+CONTENT_WIDTH = 760  # overall canvas; wider than the traditional 600-640px
+                     # email-safe max specifically to give the hero two
+                     # flanking columns (hero_flanked) without shrinking the
+                     # hero itself - still within what modern clients (Gmail,
+                     # Apple Mail, Outlook.com, mobile) render without
+                     # clipping; older Outlook desktop is the main risk.
 
 # Summary word caps applied at render time (clamp_summary), matching what
 # the SYSTEM prompt asks the model for - a safety net, not a re-prompt.
@@ -274,17 +280,22 @@ def _band(inner_html: str) -> str:
     )
 
 
-def _band_cols(cells_html: list[str], widths: list[int] | None = None) -> str:
+def _band_cols(cells_html: list[str], widths: list[int] | None = None,
+                outer_pad: int = _SIDE_PAD, margin_bottom: int = _BAND_GAP) -> str:
     """A full-width band split into columns, with a 1px vertical rule and a
-    gutter on each side between them. Side padding applies only at the
-    band's outer edges - cards themselves add no side padding."""
+    gutter on each side between them. `outer_pad` is the padding at the
+    band's own outer edges (left of the first cell, right of the last) -
+    defaults to the page-level side padding; pass 0 when this band is
+    nested inside another band's cell, so padding doesn't double up.
+    `margin_bottom` likewise defaults to the normal inter-band gap, but
+    should be 0 when nested (the outer band already provides it)."""
     n = len(cells_html)
     if widths is None:
         widths = [100 // n] * n
     tds = []
     for i, cell in enumerate(cells_html):
-        pad_l = _SIDE_PAD if i == 0 else _GUTTER
-        pad_r = _SIDE_PAD if i == n - 1 else _GUTTER
+        pad_l = outer_pad if i == 0 else _GUTTER
+        pad_r = outer_pad if i == n - 1 else _GUTTER
         border = f"border-left:1px solid {_RULE};" if i > 0 else ""
         tds.append(
             f'<td valign="top" class="col" style="width:{widths[i]}%;{border}'
@@ -292,7 +303,7 @@ def _band_cols(cells_html: list[str], widths: list[int] | None = None) -> str:
         )
     return (
         '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" '
-        f'style="width:100%;border-collapse:collapse;margin-bottom:{_BAND_GAP}px;"><tr>'
+        f'style="width:100%;border-collapse:collapse;margin-bottom:{margin_bottom}px;"><tr>'
         + "".join(tds) + '</tr></table>'
     )
 
@@ -317,13 +328,16 @@ def _join_sections(sections: list[str]) -> str:
 
 # --- hero ---
 
-def hero_band(hero: dict) -> str:
-    """Text left (64%) + image right (36%, width 200, top-aligned) if the
-    hero has an image; text-only, full width, otherwise. Never a full-width
-    banner image. The image column is narrower than a plain 58/42 split
-    specifically because most article images are ~16:9 and end up much
-    shorter than the hero's own (longer) text column - a narrower image
-    column keeps that leftover blank space smaller in absolute terms."""
+def _hero_content_html(hero: dict, nested: bool = False) -> str:
+    """The hero's own text (+ image) HTML: text left (64%) + image right
+    (36%, width 200, top-aligned) if the hero has an image; text-only
+    otherwise. Never a full-width banner image. The image column is
+    narrower than a plain 58/42 split because most article images are
+    ~16:9 and end up much shorter than the hero's own (longer) text
+    column - a narrower image column keeps that leftover blank space
+    smaller in absolute terms. `nested=True` when this is embedded inside
+    hero_flanked's own band, so it doesn't add its own outer padding/gap
+    on top of the flanking band's."""
     headline = html.escape(str(hero.get("headline", "")))
     summary = html.escape(clamp_summary(str(hero.get("summary", "")), _SUMMARY_LIMITS["lead"]))
     read_more = _read_more_link(hero.get("url", ""))
@@ -336,10 +350,48 @@ def hero_band(hero: dict) -> str:
         + (f'<div style="margin-top:{_HERO_GAP}px;">{read_more}</div>' if read_more else "")
     )
     if not _has_image(hero):
-        return _band(text_cell)
+        return text_cell
 
     image_cell = _linked_image_html(hero, 200)  # hero image is never hidden on mobile
+    if nested:
+        return _band_cols([text_cell, image_cell], widths=[64, 36], outer_pad=0, margin_bottom=0)
     return _band_cols([text_cell, image_cell], widths=[64, 36])
+
+
+def hero_band(hero: dict) -> str:
+    """Full-width hero: _hero_content_html, wrapped as its own band."""
+    content = _hero_content_html(hero)
+    if not _has_image(hero):
+        return _band(content)
+    return content  # already a complete band (image branch returns a full _band_cols table)
+
+
+def _flank_entry(story: dict) -> str:
+    """Compact kicker + linked headline for a hero-flanking column - too
+    narrow for a summary or image."""
+    kicker_html = _kicker_html(story, 9)
+    headline = html.escape(str(story.get("headline", "")))
+    safe = safe_url(story.get("url", ""))
+    if safe != "#":
+        headline_html = (
+            f'<a href="{html.escape(safe, quote=True)}" style="color:{_INK};'
+            f'text-decoration:none;font-weight:700;">{headline}</a>'
+        )
+    else:
+        headline_html = f'<span style="font-weight:700;">{headline}</span>'
+    return kicker_html + f'<div style="font-family:{_SERIF};font-size:13px;line-height:1.3;">{headline_html}</div>'
+
+
+def hero_flanked(hero: dict, flank_left: dict, flank_right: dict) -> str:
+    """The hero with one compact story column flanking it on each side.
+    Only used when the wider canvas (see render_html) has two spare brief-
+    tier stories to flank with - the hero's own text+image proportions are
+    unchanged from hero_band; the flanks use the extra width the wider
+    canvas adds, not space taken out of the hero."""
+    return _band_cols(
+        [_flank_entry(flank_left), _hero_content_html(hero, nested=True), _flank_entry(flank_right)],
+        widths=[15, 70, 15],
+    )
 
 
 # --- grid ---
@@ -519,9 +571,18 @@ def render_html(stories: list[dict], title: str = "The Daily Digest", tagline: s
     rows, moved_to_brief = _pack_rows(grid_pool)
     briefs = briefs + overflow + moved_to_brief
 
+    # Flank the hero with two brief-tier stories when there are enough to
+    # spare - uses the wider canvas's extra width, not space taken from
+    # the hero itself. Falls back to the plain hero band otherwise.
+    if len(briefs) >= 2:
+        flank_left, flank_right, *briefs = briefs
+        hero_html = hero_flanked(hero, flank_left, flank_right)
+    else:
+        hero_html = hero_band(hero)
+
     body = _join_sections([
         _masthead_html(len(stories), title, tagline),
-        hero_band(hero),
+        hero_html,
         "".join(_grid_row_html(row) for row in rows),
         brief_list_band(briefs),
         footer_band(),
@@ -536,7 +597,7 @@ def render_html(stories: list[dict], title: str = "The Daily Digest", tagline: s
         f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" bgcolor="{_PAPER}" '
         f'style="width:100%;background:{_PAPER};border-collapse:collapse;"><tr><td align="center">'
         '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" '
-        f'style="width:100%;max-width:640px;"><tr><td style="padding:24px 0;font-family:{_SANS};color:{_INK};">'
+        f'style="width:100%;max-width:{CONTENT_WIDTH}px;"><tr><td style="padding:24px 0;font-family:{_SANS};color:{_INK};">'
         + body +
         '</td></tr></table>'
         '</td></tr></table>'

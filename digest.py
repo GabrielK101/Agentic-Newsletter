@@ -65,6 +65,8 @@ def render_digest(config: dict, stories: list[dict], history: list[dict]) -> str
     """Build the digest as markdown, grouped by topic."""
     history_by_id = {h["id"]: h for h in history}
     topic_names = [t["name"] for t in config["topics"]]
+    if config.get("general_news"):
+        topic_names += ["World", "Worth knowing"]
 
     by_topic: dict[str, list[dict]] = {}
     for story in stories:

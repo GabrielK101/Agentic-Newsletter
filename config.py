@@ -5,7 +5,14 @@ from pathlib import Path
 import yaml
 
 _VALID_COMMENTARY = {"none", "context", "analysis"}
-_TOP_LEVEL_KEYS = {"lookback_days", "history_days", "topics", "sites", "title", "tagline", "images", "recipient"}
+_TOP_LEVEL_KEYS = {
+    "lookback_days", "history_days", "topics", "sites", "title", "tagline",
+    "images", "recipient", "general_news", "general_focus",
+}
+_DEFAULT_GENERAL_FOCUS = (
+    "the biggest global stories of the day, plus one or two genuinely "
+    "interesting or unexpected stories"
+)
 _TOPIC_KEYS = {"name", "focus", "commentary"}
 
 
@@ -93,6 +100,14 @@ def load_config(path: str | None = None) -> dict:
     if recipient is not None and (not isinstance(recipient, str) or not recipient.strip()):
         raise ValueError(f"config key 'recipient' must be a non-empty string if present, got {recipient!r}")
     raw["recipient"] = recipient  # None means "fall back to DIGEST_TO"
+
+    raw.setdefault("general_news", True)
+    if not isinstance(raw["general_news"], bool):
+        raise ValueError(f"config key 'general_news' must be true or false, got {raw['general_news']!r}")
+
+    raw.setdefault("general_focus", _DEFAULT_GENERAL_FOCUS)
+    if not isinstance(raw["general_focus"], str) or not raw["general_focus"].strip():
+        raise ValueError(f"config key 'general_focus' must be a non-empty string, got {raw['general_focus']!r}")
 
     return raw
 

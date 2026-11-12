@@ -47,3 +47,7 @@ images: true
 
 # No recipient here on purpose - set DIGEST_TO as a real secret/env var at
 # deploy time, not baked into the image.
+
+# Always include general news (top global stories, plus a couple of
+# interesting/unexpected ones) alongside the topics above.
+general_news: true

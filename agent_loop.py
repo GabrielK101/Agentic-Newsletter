@@ -44,6 +44,9 @@ SYSTEM = """You are a news editor building a daily digest for one reader.
   newsworthy story of the day, judged against every topic, not just its own
   section. Set "lead": true on that one story and "lead": false on every
   other story.
+- The lead is the biggest story of the day overall, even if it is outside
+  the user's topics. Topics guarantee coverage; they do not limit what can
+  lead.
 - Give every story a "weight" of 1, 2, or 3: 3 for a major development that
   matters a lot to this reader or that several outlets are covering, 2 for
   notable, 1 for worth only a line. Aim for a real spread across the digest -
@@ -111,6 +114,16 @@ def build_request(config: dict, history: list[dict]) -> str:
     )
     sites = "\n".join(f"- {s}" for s in config["sites"])
 
+    general_news = ""
+    if config.get("general_news"):
+        general_news = (
+            f"\n\nGeneral news (always include): {config['general_focus']}. Use "
+            f"topic labels 'World' for major global news and 'Worth knowing' "
+            f"for interesting or unexpected stories. Search broadly (for "
+            f"example 'top news today', 'world news') in addition to the "
+            f"topic searches."
+        )
+
     if history:
         told_lines = "\n".join(
             f"- id {h['id']} | {h['told_on']} | {h['topic']} | {h['headline']} | "
@@ -122,7 +135,7 @@ def build_request(config: dict, history: list[dict]) -> str:
 
     return (
         f"Today is {today}. Build my digest from roughly the last {config['lookback_days']} days.\n\n"
-        f"Topics:\n{topics}\n\n"
+        f"Topics:\n{topics}{general_news}\n\n"
         f"Sites to check:\n{sites}\n\n"
         f"Already told (last {config['history_days']} days):\n{told_lines}"
     )

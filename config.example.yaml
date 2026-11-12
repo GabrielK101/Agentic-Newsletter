@@ -31,3 +31,9 @@ images: true
 
 # Who the email goes to. Optional - falls back to env DIGEST_TO if unset.
 # recipient: you@example.com
+
+# Always include general news (top global stories, plus a couple of
+# interesting/unexpected ones) alongside your topics. Set to false to
+# cover only the topics above.
+general_news: true
+# general_focus: the biggest global stories of the day, plus one or two genuinely interesting or unexpected stories

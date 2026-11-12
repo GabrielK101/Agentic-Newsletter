@@ -29,32 +29,35 @@ def fixture_stories(config: dict, count: int = 15) -> list[dict]:
     )
     hostile_summary = "AT&T said <b>nothing</b> official yet about the breach."
 
-    # (basis, update_of, tier_or_"lead", summary, headline, url_override, has_image)
+    # (basis, update_of, tier_or_"lead", summary, headline, url_override, has_image, topic_override)
     # Roughly half carry an image, and every tier has both with and without,
     # so layouts that depend on image presence get exercised either way.
+    # Two entries use topic_override to exercise the general-news topics
+    # ("World", "Worth knowing") that sit outside the user's configured
+    # topics - see config.py's general_news/general_focus.
     template = [
-        ("article", None, "lead", long_summary, "Fixture hero story leads the whole digest", None, True),
-        ("article", None, 3, long_summary, "Fixture major story number one", None, True),
-        ("snippet", None, 3, short_summary, "Fixture major story number two (snippet basis)", None, False),
-        ("article", 1, 2, short_summary, "Fixture standard story with an update_of reference", None, True),
-        ("article", None, 2, short_summary, "Fixture standard story two", None, False),
-        ("article", None, 2, short_summary, "Fixture standard story three", None, True),
-        ("article", None, 2, long_summary, "Fixture standard story four, long summary", None, False),
-        ("article", None, 1, two_sentence_summary, "Fixture brief with two sentences", None, True),
-        ("article", None, 1, no_period_summary, "Fixture brief with no sentence break", None, False),
-        ("article", None, 1, short_summary, "Fixture brief story three", None, True),
-        ("article", None, 1, hostile_summary, "<script>alert(1)</script> AT&T", "javascript:alert(1)", False),
-        ("article", None, 2, short_summary, "Fixture standard story five", None, False),
-        ("snippet", None, 1, short_summary, "Fixture brief story four", None, True),
-        ("article", None, 3, short_summary, "Fixture extra major-weight story", None, False),
-        ("article", None, 2, short_summary, "Fixture standard story six", None, True),
+        ("article", None, "lead", long_summary, "Fixture hero story leads the whole digest", None, True, None),
+        ("article", None, 3, long_summary, "Fixture major story number one", None, True, None),
+        ("snippet", None, 3, short_summary, "Fixture major story number two (snippet basis)", None, False, None),
+        ("article", 1, 2, short_summary, "Fixture standard story with an update_of reference", None, True, None),
+        ("article", None, 2, short_summary, "Fixture standard story two", None, False, None),
+        ("article", None, 2, short_summary, "Fixture standard story three", None, True, None),
+        ("article", None, 2, long_summary, "Fixture standard story four, long summary", None, False, None),
+        ("article", None, 1, two_sentence_summary, "Fixture brief with two sentences", None, True, None),
+        ("article", None, 1, no_period_summary, "Fixture brief with no sentence break", None, False, None),
+        ("article", None, 1, short_summary, "Fixture brief story three", None, True, None),
+        ("article", None, 1, hostile_summary, "<script>alert(1)</script> AT&T", "javascript:alert(1)", False, None),
+        ("article", None, 2, short_summary, "Fixture general-news story, World", None, False, "World"),
+        ("snippet", None, 1, short_summary, "Fixture general-news story, Worth knowing", None, True, "Worth knowing"),
+        ("article", None, 3, short_summary, "Fixture extra major-weight story", None, False, None),
+        ("article", None, 2, short_summary, "Fixture standard story six", None, True, None),
     ]
 
     stories = []
-    for i, (basis, update_of, tier, summary, headline, url_override, has_image) in enumerate(template[:count]):
+    for i, (basis, update_of, tier, summary, headline, url_override, has_image, topic_override) in enumerate(template[:count]):
         is_lead = tier == "lead"
         stories.append({
-            "topic": topics[i % len(topics)],
+            "topic": topic_override or topics[i % len(topics)],
             "headline": headline,
             "summary": summary,
             "url": url_override or f"https://example.com/fixture-story-{i + 1}",

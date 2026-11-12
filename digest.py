@@ -19,27 +19,13 @@ from storage import sync_down, sync_up
 
 load_dotenv()
 
-def _arg_value(flag: str, default: str | None = None) -> str | None:
-    """Value following `flag` in argv, e.g. --fixture-count 5 -> '5'."""
-    argv = sys.argv[1:]
-    if flag not in argv:
-        return default
-    idx = argv.index(flag)
-    return argv[idx + 1] if idx + 1 < len(argv) else default
-
-
 DRY_RUN = "--dry-run" in sys.argv[1:]
 SEND = "--send" in sys.argv[1:]
-FIXTURE = "--fixture" in sys.argv[1:]  # skip the model/tools; use canned stories
+FIXTURE = "--fixture" in sys.argv[1:]  # skip the model/tools; use a canned front page
 CHECK = "--check" in sys.argv[1:]  # validate config/env only; no model, tool, or email calls
 
 if FIXTURE:
     DRY_RUN = True  # fixture stories must never be able to reach the DB
-
-try:
-    FIXTURE_COUNT = max(1, min(15, int(_arg_value("--fixture-count", "15"))))
-except ValueError:
-    FIXTURE_COUNT = 15
 
 if SEND:
     os.environ["DIGEST_DELIVERY"] = "email"  # overrides DIGEST_DELIVERY=local
@@ -49,50 +35,168 @@ PRICE_IN_PER_M = 3.0
 PRICE_OUT_PER_M = 15.0
 
 
-def normalise_weight(story: dict) -> int:
-    """Coerce a story's "weight" to 1, 2, or 3. Anything else - missing,
-    wrong type, out of range - becomes 2 (STANDARD)."""
-    weight = story.get("weight")
-    if isinstance(weight, bool) or not isinstance(weight, int) or weight not in (1, 2, 3):
-        return 2
-    return weight
+def _lead_summary(lead: dict) -> str:
+    """The lead's dek + body joined into one block - used both as the
+    HTML/text renderer's "summary" for the hero card and as what gets
+    stored for future "Already told" context."""
+    return " ".join(part for part in (lead.get("dek", ""), lead.get("body", "")) if part).strip()
 
 
-def render_digest(config: dict, stories: list[dict], history: list[dict]) -> str:
-    """Build the digest as markdown, grouped by topic."""
+def _is_fresh_and_new(item: dict, cutoff: str) -> bool:
+    """A story is usable only if it isn't older than the lookback window
+    (or carries no date at all) and its url hasn't already been told."""
+    published = item.get("published")
+    if published and published < cutoff:
+        return False
+    return bool(item.get("url")) and not seen_url(item["url"])
+
+
+def prepare_front_page(digest: dict, cutoff: str) -> tuple[dict | None, list[dict], list[dict]]:
+    """Apply the lookback-days cutoff and the already-seen-url check to
+    every item BEFORE it can appear in the digest. The lead must survive
+    both checks; if it doesn't, the first surviving secondary item - or,
+    failing that, the first surviving brief - is promoted to lead instead.
+    The lead is never allowed to be a stale or already-told story."""
+    lead = digest.get("lead")
+    secondary = [s for s in digest.get("secondary", []) if _is_fresh_and_new(s, cutoff)]
+    sections = []
+    for section in digest.get("sections", []):
+        briefs = [b for b in section.get("briefs", []) if _is_fresh_and_new(b, cutoff)]
+        sections.append({"name": section["name"], "briefs": briefs})
+
+    if lead is not None and not _is_fresh_and_new(lead, cutoff):
+        lead = None
+        if secondary:
+            lead, secondary = secondary[0], secondary[1:]
+        else:
+            for section in sections:
+                if section["briefs"]:
+                    lead, section["briefs"] = section["briefs"][0], section["briefs"][1:]
+                    break
+
+    return lead, secondary, sections
+
+
+def build_render_stories(lead: dict | None, secondary: list[dict], sections: list[dict]) -> list[dict]:
+    """Flatten the front-page shape into the flat list the existing HTML/
+    text renderer expects: lead -> HERO (hero selection keys off
+    "lead": True, not weight), secondary -> MAJOR (weight 3), section
+    briefs -> BRIEF (weight 1)."""
+    stories = []
+    if lead is not None:
+        stories.append({
+            "topic": lead.get("topic", ""),
+            "headline": lead["headline"],
+            "summary": _lead_summary(lead),
+            "url": lead["url"],
+            "update_of": lead.get("update_of"),
+            "lead": True,
+            "weight": 3,
+        })
+    for item in secondary:
+        stories.append({
+            "topic": item.get("topic", ""),
+            "headline": item["headline"],
+            "summary": item.get("summary", ""),
+            "url": item["url"],
+            "update_of": item.get("update_of"),
+            "lead": False,
+            "weight": 3,
+        })
+    for section in sections:
+        for brief in section["briefs"]:
+            stories.append({
+                "topic": section["name"],
+                "headline": brief["headline"],
+                "summary": brief.get("summary", ""),
+                "url": brief["url"],
+                "update_of": brief.get("update_of"),
+                "lead": False,
+                "weight": 1,
+            })
+    return stories
+
+
+def render_digest(lead: dict | None, secondary: list[dict], sections: list[dict],
+                   ticker: list[dict], scoreboard: list[dict], sources: list[dict],
+                   disclosure: str | None, history: list[dict]) -> str:
+    """Build the front page as markdown: lead, then secondary stories,
+    then each section's briefs, then markets/scoreboard/sources/disclosure
+    if present."""
     history_by_id = {h["id"]: h for h in history}
-    topic_names = [t["name"] for t in config["topics"]]
-    if config.get("general_news"):
-        topic_names += ["World", "Worth knowing"]
 
-    by_topic: dict[str, list[dict]] = {}
-    for story in stories:
-        by_topic.setdefault(story.get("topic"), []).append(story)
+    def _update_line(item: dict) -> str | None:
+        update_of = item.get("update_of")
+        if update_of is None:
+            return None
+        prior = history_by_id.get(update_of)
+        return f"(follows: {prior['headline']})" if prior else None
 
     lines = []
-    for topic in topic_names:
-        topic_stories = by_topic.get(topic)
-        if not topic_stories:
-            continue
-        lines.append(f"## {topic}\n")
-        for story in topic_stories:
-            headline = story["headline"]
-            update_of = story.get("update_of")
-            if update_of is not None:
-                headline = f"Update: {headline}"
-            lines.append(f"**{headline}**")
-            if update_of is not None:
-                prior = history_by_id.get(update_of)
-                if prior:
-                    lines.append(f"(follows: {prior['headline']})")
-            summary = story["summary"]
-            if story.get("basis") == "snippet":
-                summary = f"{summary} (based on a search snippet only)"
-            lines.append(summary)
-            published = story.get("published")
-            lines.append(f"Published: {published if published else '(date unverified)'}")
-            lines.append(story["url"])
+
+    if lead is not None:
+        lines.append(f"# {lead['headline']}")
+        if lead.get("dek"):
+            lines.append(f"*{lead['dek']}*")
+        update_line = _update_line(lead)
+        if update_line:
+            lines.append(update_line)
+        if lead.get("body"):
+            lines.append(lead["body"])
+        if lead.get("sources"):
+            lines.append(f"Sources: {', '.join(lead['sources'])}")
+        lines.append(lead["url"])
+        lines.append("")
+
+    if secondary:
+        lines.append("## Also today\n")
+        for item in secondary:
+            lines.append(f"**{item['headline']}**")
+            update_line = _update_line(item)
+            if update_line:
+                lines.append(update_line)
+            if item.get("summary"):
+                lines.append(item["summary"])
+            lines.append(item["url"])
             lines.append("")
+
+    for section in sections:
+        if not section["briefs"]:
+            continue
+        lines.append(f"## {section['name']}\n")
+        for brief in section["briefs"]:
+            lines.append(f"**{brief['headline']}**")
+            update_line = _update_line(brief)
+            if update_line:
+                lines.append(update_line)
+            if brief.get("summary"):
+                lines.append(brief["summary"])
+            lines.append(brief["url"])
+            lines.append("")
+
+    if ticker:
+        lines.append("## Markets\n")
+        arrows = {"up": "^", "down": "v", "flat": "-"}
+        for row in ticker:
+            change = f" {row['change']}" if row.get("change") else ""
+            arrow = arrows.get(row.get("direction"), "")
+            lines.append(f"- {row['label']}: {row['value']}{change} {arrow}".rstrip())
+        lines.append("")
+
+    if scoreboard:
+        lines.append("## Scoreboard\n")
+        for row in scoreboard:
+            lines.append(f"- {row['label']}: {row['line']}")
+        lines.append("")
+
+    if sources:
+        lines.append("## Sources\n")
+        for src in sources:
+            lines.append(f"- {src['name']}" + (f" ({src['url']})" if src.get("url") else ""))
+        lines.append("")
+
+    if disclosure:
+        lines.append(f"*{disclosure}*")
 
     return "\n".join(lines)
 
@@ -180,11 +284,8 @@ if __name__ == "__main__":
     history = recent_stories(config["history_days"])
 
     if FIXTURE:
-        print(f"[fixture] skipping the model and all tools; using {FIXTURE_COUNT} canned test stories.")
-        digest = {
-            "stories": fixture_stories(config, count=FIXTURE_COUNT),
-            "notes": "Fixture test run - no real sources were read.",
-        }
+        print("[fixture] skipping the model and all tools; using a canned front-page digest.")
+        digest = fixture_stories(config)
         usage = {"input_tokens": 0, "output_tokens": 0}
     else:
         raw_text, hit_max_turns, usage = run_agent(config, history)
@@ -198,18 +299,8 @@ if __name__ == "__main__":
             sys.exit(1)
 
     cutoff = (date.today() - timedelta(days=config["lookback_days"])).isoformat()
-    stories = []
-    for story in digest.get("stories", []):
-        published = story.get("published")
-        if published and published < cutoff:
-            print(f"[dropped: too old] {story.get('headline', '?')} ({published})")
-            continue
-        stories.append(story)
-
-    stories = [s for s in stories if not seen_url(s["url"])]
-
-    for story in stories:
-        story["weight"] = normalise_weight(story)  # rendering only; never stored
+    lead, secondary, sections = prepare_front_page(digest, cutoff)
+    stories = build_render_stories(lead, secondary, sections)
 
     # Deliver BEFORE persisting. If delivery fails (send() exits non-zero
     # internally on a failed email), nothing below runs, so no story gets
@@ -219,18 +310,30 @@ if __name__ == "__main__":
     # silently lose a story forever. Worst case now is the opposite and far
     # safer - a crash between send and save can at most repeat a story in
     # tomorrow's digest, never lose one.
-    rendered = render_digest(config, stories, history)
+    rendered = render_digest(
+        lead, secondary, sections,
+        digest.get("ticker", []), digest.get("scoreboard", []), digest.get("sources", []),
+        digest.get("disclosure"), history,
+    )
     deliver(rendered, stories, title=config["title"], tagline=config["tagline"], recipient=config["recipient"])
 
     if not DRY_RUN:
-        for story in stories:
+        if lead is not None:
             save_story(
-                topic=story["topic"],
-                headline=story["headline"],
-                summary=story["summary"],
-                url=story["url"],
-                update_of=story.get("update_of"),
+                topic=lead.get("topic", ""), headline=lead["headline"],
+                summary=_lead_summary(lead), url=lead["url"], update_of=lead.get("update_of"),
             )
+        for item in secondary:
+            save_story(
+                topic=item.get("topic", ""), headline=item["headline"],
+                summary=item.get("summary", ""), url=item["url"], update_of=item.get("update_of"),
+            )
+        for section in sections:
+            for brief in section["briefs"]:
+                save_story(
+                    topic=section["name"], headline=brief["headline"],
+                    summary=brief.get("summary", ""), url=brief["url"], update_of=brief.get("update_of"),
+                )
         sync_up()
 
     notes = digest.get("notes", "").strip()

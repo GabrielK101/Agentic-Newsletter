@@ -1,68 +1,126 @@
-"""fixtures.py - canned test stories for exercising rendering/delivery
-without calling the model or any tools."""
+"""fixtures.py - a canned front-page digest for exercising rendering/
+delivery without calling the model or any tools."""
 from datetime import date
 
 
-def fixture_stories(config: dict, count: int = 15) -> list[dict]:
-    """Canned stories for testing rendering/delivery without calling the
-    model or any tools. Covers every tier (1 hero, 2 major, standard, brief),
-    mixed topics and basis types, an update_of reference, summaries of very
-    different lengths, and one deliberately hostile story for escaping."""
-    count = max(1, min(count, 15))
-    topics = [t["name"] for t in config["topics"]]
+def fixture_stories(config: dict) -> dict:
+    """A front-page digest shaped exactly like parse_digest's output:
+    {lead, secondary, sections, ticker, scoreboard, sources, disclosure,
+    notes}. Covers a long and a short example, one empty section (the
+    quiet-day case), no ticker, a scoreboard, and one deliberately hostile
+    item (<script> headline, javascript: url) for escaping/safe_url."""
+    topics = [t["name"] for t in config["topics"]] or ["General"]
     today = date.today().isoformat()
 
-    long_summary = (
-        "This is a longer fixture summary meant to sit near the ninety word "
-        "limit used for real digest stories, so a card's wrapping and line "
-        "height can be checked visually. It keeps going for a few more "
-        "clauses to make sure there is enough text to actually wrap across "
-        "several lines inside a narrow email column, rather than fitting on "
-        "one short line that would not reveal any layout problems at all."
+    long_body = (
+        "This is a longer fixture body meant to sit near the word limit used "
+        "for a real lead story, so a hero card's wrapping and line height can "
+        "be checked visually.\n\n"
+        "It continues into a second short paragraph, the way a real "
+        "front-page lead would, to make sure a multi-paragraph body renders "
+        "sensibly end to end."
     )
     short_summary = "Short summary, one sentence only."
-    two_sentence_summary = "First sentence of this brief. Second sentence should be dropped."
-    no_period_summary = (
-        "A run of text with no sentence ending punctuation at all so the "
-        "first sentence helper has to fall back to a plain character limit "
-        "instead of finding a period question mark or exclamation mark"
-    )
-    hostile_summary = "AT&T said <b>nothing</b> official yet about the breach."
 
-    # (basis, update_of, tier_or_"lead", summary, headline, url_override, topic_override)
-    # Two entries use topic_override to exercise the general-news topics
-    # ("World", "Worth knowing") that sit outside the user's configured
-    # topics - see config.py's general_news/general_focus.
-    template = [
-        ("article", None, "lead", long_summary, "Fixture hero story leads the whole digest", None, None),
-        ("article", None, 3, long_summary, "Fixture major story number one", None, None),
-        ("snippet", None, 3, short_summary, "Fixture major story number two (snippet basis)", None, None),
-        ("article", 1, 2, short_summary, "Fixture standard story with an update_of reference", None, None),
-        ("article", None, 2, short_summary, "Fixture standard story two", None, None),
-        ("article", None, 2, short_summary, "Fixture standard story three", None, None),
-        ("article", None, 2, long_summary, "Fixture standard story four, long summary", None, None),
-        ("article", None, 1, two_sentence_summary, "Fixture brief with two sentences", None, None),
-        ("article", None, 1, no_period_summary, "Fixture brief with no sentence break", None, None),
-        ("article", None, 1, short_summary, "Fixture brief story three", None, None),
-        ("article", None, 1, hostile_summary, "<script>alert(1)</script> AT&T", "javascript:alert(1)", None),
-        ("article", None, 2, short_summary, "Fixture general-news story, World", None, "World"),
-        ("snippet", None, 1, short_summary, "Fixture general-news story, Worth knowing", None, "Worth knowing"),
-        ("article", None, 3, short_summary, "Fixture extra major-weight story", None, None),
-        ("article", None, 2, short_summary, "Fixture standard story six", None, None),
+    lead = {
+        "topic": topics[0],
+        "headline": "Fixture hero story leads the whole front page",
+        "dek": "A one-line subhead that expands on the headline.",
+        "body": long_body,
+        "url": "https://example.com/fixture-lead",
+        "sources": ["Example Wire", "Example Daily"],
+        "published": today,
+        "update_of": None,
+    }
+
+    secondary = [
+        {
+            "topic": topics[1 % len(topics)],
+            "headline": "Fixture secondary story, long",
+            "summary": (
+                "A longer fixture summary for a secondary story, long enough "
+                "to wrap across a couple of lines in a major-tier card."
+            ),
+            "url": "https://example.com/fixture-secondary-1",
+            "published": today,
+            "update_of": None,
+        },
+        {
+            "topic": topics[2 % len(topics)],
+            "headline": "Fixture secondary story, short",
+            "summary": short_summary,
+            "url": "https://example.com/fixture-secondary-2",
+            "published": today,
+            "update_of": None,
+        },
     ]
 
-    stories = []
-    for i, (basis, update_of, tier, summary, headline, url_override, topic_override) in enumerate(template[:count]):
-        is_lead = tier == "lead"
-        stories.append({
-            "topic": topic_override or topics[i % len(topics)],
-            "headline": headline,
-            "summary": summary,
-            "url": url_override or f"https://example.com/fixture-story-{i + 1}",
-            "published": today,
-            "basis": basis,
-            "update_of": update_of,
-            "lead": is_lead,
-            "weight": 2 if is_lead else tier,
-        })
-    return stories
+    sections = [
+        {
+            "name": topics[0],
+            "briefs": [
+                {
+                    "headline": "Fixture brief with a follow-up reference",
+                    "summary": short_summary,
+                    "url": "https://example.com/fixture-brief-1",
+                    "published": today,
+                    "update_of": 1,
+                },
+                {
+                    "headline": "<script>alert(1)</script> AT&T",
+                    "summary": "AT&T said <b>nothing</b> official yet about the breach.",
+                    "url": "javascript:alert(1)",
+                    "published": today,
+                    "update_of": None,
+                },
+            ],
+        },
+        {
+            "name": topics[1 % len(topics)] if len(topics) > 1 else "Big tech",
+            "briefs": [],  # a quiet day - nothing new for this section
+        },
+        {
+            "name": "World",
+            "briefs": [
+                {
+                    "headline": "Fixture World brief",
+                    "summary": short_summary,
+                    "url": "https://example.com/fixture-world-1",
+                    "published": today,
+                    "update_of": None,
+                },
+            ],
+        },
+        {
+            "name": "Worth knowing",
+            "briefs": [
+                {
+                    "headline": "Fixture Worth-knowing brief",
+                    "summary": short_summary,
+                    "url": "https://example.com/fixture-worth-knowing-1",
+                    "published": today,
+                    "update_of": None,
+                },
+            ],
+        },
+    ]
+
+    scoreboard = [
+        {"label": "Formula 1", "line": "Fixture GP: Driver A won, Driver B second."},
+    ]
+
+    sources = [
+        {"name": "Example Wire", "url": "https://example.com"},
+        {"name": "Example Daily", "url": None},
+    ]
+
+    return {
+        "lead": lead,
+        "secondary": secondary,
+        "sections": sections,
+        "ticker": [],  # deliberately omitted - no real tool-sourced market data here
+        "scoreboard": scoreboard,
+        "sources": sources,
+        "disclosure": "This digest is produced by an automated agent and may contain errors.",
+        "notes": "Fixture test run - no real sources were read.",
+    }

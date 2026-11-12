@@ -33,8 +33,7 @@ Fill in `ANTHROPIC_API_KEY` and `TAVILY_API_KEY` in `.env`, and edit `config.yam
 python digest.py
 python digest.py --dry-run           # skip saving to the DB, still write files
 python digest.py --send              # force email delivery for this run, overriding DIGEST_DELIVERY
-python digest.py --fixture           # skip the model and all tools; use canned stories to test rendering/delivery
-python digest.py --fixture --fixture-count N  # 1-15 canned stories instead of the default 15
+python digest.py --fixture           # skip the model and all tools; use a canned front-page digest to test rendering/delivery
 python digest.py --fixture --send    # test the actual email send, free and instant - no model calls, no DB writes
 python digest.py --check             # validate config/env only - no model, tool, or email calls; exits non-zero on any problem
 ```

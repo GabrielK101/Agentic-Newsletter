@@ -41,10 +41,6 @@ sites:
 title: The Daily Digest
 tagline: Your personalised morning briefing
 
-# Fetch an article image for each story (hotlinked from the publisher - see
-# the README note on what that reveals to them). Set to false to turn it off.
-images: true
-
 # No recipient here on purpose - set DIGEST_TO as a real secret/env var at
 # deploy time, not baked into the image.
 

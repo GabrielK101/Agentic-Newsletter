@@ -36,15 +36,12 @@ python digest.py --send              # force email delivery for this run, overri
 python digest.py --fixture           # skip the model and all tools; use canned stories to test rendering/delivery
 python digest.py --fixture --fixture-count N  # 1-15 canned stories instead of the default 15
 python digest.py --fixture --send    # test the actual email send, free and instant - no model calls, no DB writes
-python digest.py --no-images         # skip article image fetching for this run
 python digest.py --check             # validate config/env only - no model, tool, or email calls; exits non-zero on any problem
 ```
 
 **Delivery happens before the DB is updated.** If sending fails, nothing gets marked "told" - a retry picks the same stories up again. A crash between send and save can at worst repeat a story in the next digest; it can never silently lose one.
 
 `--fixture` is the fast way to test email end-to-end (HTML rendering, SMTP login/send) without paying for or waiting on a real search run. Combine it with `--dry-run` so repeated test runs don't pollute the "already told" history with the fixture's fake URLs.
-
-Article images are hotlinked directly from the publisher's own site, not re-hosted - which means opening the email can let the publisher know it was opened (most email clients, including Gmail, proxy images through their own servers, which hides this from most publishers, but not all clients do). Set `images: false` in `config.yaml`, or pass `--no-images` for a single run, to turn image fetching off.
 
 ## File structure
 
@@ -53,13 +50,12 @@ Article images are hotlinked directly from the publisher's own site, not re-host
 - `digest.py` - orchestration and the CLI entry point: loads config, runs the pipeline end to end, hands the result off for delivery.
 - `agent_loop.py` - the model-facing tool-use loop: the SYSTEM prompt, building the request, and the turn-by-turn loop itself.
 - `fixtures.py` - canned test stories for exercising rendering/delivery without calling the model or any tools (`--fixture`).
-- `images.py` - finds a representative article image per story, code-only (no model calls), with SSRF-safe fetching.
-- `config.py` / `config.yaml` - loads and validates the run config (lookback window, history window, topics, sites, images on/off).
+- `config.py` / `config.yaml` - loads and validates the run config (lookback window, history window, topics, sites).
 - `db.py` - SQLite storage for past stories, used to dedupe and to report follow-ups.
 - `storage.py` - syncs the DB file to/from a remote backend before/after a run (currently local-only; `s3`/`gcs` are stubs).
 - `delivery.py` - delivery mechanics: saves files, builds and sends the email.
 - `newsletter_render.py` - the HTML/text layout engine that turns stories into the rendered digest.
-- `tests/` - standalone test scripts, each runnable directly (no test runner required): `test_db.py`, `test_images.py`.
+- `tests/` - standalone test scripts, each runnable directly (no test runner required): `test_db.py`.
 - `config.prod.yaml` - committed, non-secret production config baked into the Docker image.
 - `Dockerfile` / `.dockerignore` - container image for running the job on a schedule. Not deployed anywhere yet.
 
@@ -76,7 +72,6 @@ The image runs as a non-root user, uses `config.prod.yaml` (`DIGEST_CONFIG=confi
 
 ```
 python tests/test_db.py
-python tests/test_images.py
 ```
 
 Both are self-contained (no network access, no real `digest.db` touched) and print `all tests passed` / the standard `unittest` summary on success.

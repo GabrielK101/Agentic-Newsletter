@@ -1,8 +1,7 @@
 """digest.py - CLI entry point and orchestration for the news digest.
 
 Parses CLI flags, wires together the agent loop (agent_loop.py), fixtures
-(fixtures.py), the database, image enrichment and delivery, then renders
-and ships the digest.
+(fixtures.py), the database and delivery, then renders and ships the digest.
 """
 import os
 import sys
@@ -16,7 +15,6 @@ from fixtures import fixture_stories
 from config import load_config
 from db import init_db, recent_stories, save_story, seen_url
 from delivery import deliver
-from images import enrich_images
 from storage import sync_down, sync_up
 
 load_dotenv()
@@ -33,7 +31,6 @@ def _arg_value(flag: str, default: str | None = None) -> str | None:
 DRY_RUN = "--dry-run" in sys.argv[1:]
 SEND = "--send" in sys.argv[1:]
 FIXTURE = "--fixture" in sys.argv[1:]  # skip the model/tools; use canned stories
-NO_IMAGES = "--no-images" in sys.argv[1:]  # skip enrich_images for this run
 CHECK = "--check" in sys.argv[1:]  # validate config/env only; no model, tool, or email calls
 
 if FIXTURE:
@@ -211,9 +208,6 @@ if __name__ == "__main__":
 
     stories = [s for s in stories if not seen_url(s["url"])]
 
-    if not FIXTURE and not NO_IMAGES and config["images"]:
-        enrich_images(stories)
-
     for story in stories:
         story["weight"] = normalise_weight(story)  # rendering only; never stored
 
@@ -236,7 +230,6 @@ if __name__ == "__main__":
                 summary=story["summary"],
                 url=story["url"],
                 update_of=story.get("update_of"),
-                image_url=story.get("image_url"),
             )
         sync_up()
 

@@ -22,8 +22,7 @@ CREATE TABLE IF NOT EXISTS stories (
     summary   TEXT NOT NULL,
     url       TEXT NOT NULL,
     url_norm  TEXT NOT NULL UNIQUE,
-    update_of INTEGER REFERENCES stories(id),
-    image_url TEXT
+    update_of INTEGER REFERENCES stories(id)
 );
 CREATE INDEX IF NOT EXISTS idx_stories_told_on ON stories(told_on);
 """
@@ -33,10 +32,6 @@ def init_db() -> None:
     with closing(get_conn()) as conn:
         with conn:
             conn.executescript(SCHEMA)
-            # Migrate a pre-existing digest.db that predates image_url.
-            columns = {row["name"] for row in conn.execute("PRAGMA table_info(stories)")}
-            if "image_url" not in columns:
-                conn.execute("ALTER TABLE stories ADD COLUMN image_url TEXT")
 
 _TRACKING_PARAMS = {"fbclid", "gclid", "mc_cid", "mc_eid"}
 
@@ -65,7 +60,7 @@ def normalize_url(url: str) -> str:
     return urlunsplit((scheme, host, path, query, ""))  # fragment dropped
 
 def save_story(topic: str, headline: str, summary: str, url: str, update_of: int | None = None,
-               told_on: date | None = None, image_url: str | None = None) -> int | None:
+               told_on: date | None = None) -> int | None:
     if told_on is None:
         told_on = date.today()
 
@@ -77,9 +72,9 @@ def save_story(topic: str, headline: str, summary: str, url: str, update_of: int
 
         with conn:
             cur = conn.execute(
-                "INSERT OR IGNORE INTO stories (told_on, topic, headline, summary, url, url_norm, update_of, image_url) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                (told_on.isoformat(), topic, headline, summary, url, normalize_url(url), update_of, image_url),
+                "INSERT OR IGNORE INTO stories (told_on, topic, headline, summary, url, url_norm, update_of) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (told_on.isoformat(), topic, headline, summary, url, normalize_url(url), update_of),
             )
         if cur.rowcount == 0:
             return None  # duplicate url_norm

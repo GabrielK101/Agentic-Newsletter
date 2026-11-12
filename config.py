@@ -7,7 +7,7 @@ import yaml
 _VALID_COMMENTARY = {"none", "context", "analysis"}
 _TOP_LEVEL_KEYS = {
     "lookback_days", "history_days", "topics", "sites", "title", "tagline",
-    "images", "recipient", "general_news", "general_focus",
+    "recipient", "general_news", "general_focus",
 }
 _DEFAULT_GENERAL_FOCUS = (
     "the biggest global stories of the day, plus one or two genuinely "
@@ -91,10 +91,6 @@ def load_config(path: str | None = None) -> dict:
     if tagline is not None and (not isinstance(tagline, str) or not tagline.strip()):
         raise ValueError(f"config key 'tagline' must be a non-empty string if present, got {tagline!r}")
     raw["tagline"] = tagline
-
-    raw.setdefault("images", True)
-    if not isinstance(raw["images"], bool):
-        raise ValueError(f"config key 'images' must be true or false, got {raw['images']!r}")
 
     recipient = raw.get("recipient")
     if recipient is not None and (not isinstance(recipient, str) or not recipient.strip()):

@@ -26,7 +26,6 @@ _GUTTER = 12     # padding on each side of a column rule
 _BAND_GAP = 16   # vertical space after each band (compact, per the redesign)
 _CARD_GAP = 4    # vertical space between a card's own headline/summary/read-more
 _HERO_GAP = 8    # vertical space between the hero's headline/summary/read-more
-_IMAGE_GAP = 10  # space below every image, before whatever follows it
 
 MAX_CARDS = 9    # hero included - at most 8 more cards in the grid
 CONTENT_WIDTH = 760  # overall canvas; wider than the traditional 600-640px
@@ -53,11 +52,6 @@ _MEDIA_QUERY_CSS = (
     # side on desktop; the border-top above replaces it so consecutive
     # stacked cards (e.g. one card's read-more right above the next card's
     # kicker) still read as visually distinct, not run together.
-    f".imgcol{{display:block !important;width:100% !important;box-sizing:border-box !important;"
-    f"padding:0 0 {_IMAGE_GAP}px 0 !important;}}"
-    ".txtcol{display:block !important;width:100% !important;box-sizing:border-box !important;"
-    "padding:0 !important;}"
-    ".hide-mobile{display:none !important;}"
     "}"
 )
 
@@ -67,34 +61,6 @@ def safe_url(url: str) -> str:
     if isinstance(url, str) and (url.startswith("http://") or url.startswith("https://")):
         return url
     return "#"
-
-
-def _has_image(story: dict) -> bool:
-    """Images are https-only - stricter than safe_url's http-or-https."""
-    url = story.get("image_url")
-    return isinstance(url, str) and url.startswith("https://")
-
-
-def _linked_image_html(story: dict, width: int, hide_on_mobile: bool = False) -> str:
-    """An <img> wrapped in a link to the story. Width attribute plus a style
-    of width/max-width/height:auto/display:block/border:0 - never a fixed
-    height - plus a bottom margin so whatever follows doesn't sit flush
-    against it. "" if the story has no https image. `hide_on_mobile` adds
-    class="hide-mobile" (everything except the hero's own image)."""
-    if not _has_image(story):
-        return ""
-    src = html.escape(story["image_url"], quote=True)
-    alt = html.escape(str(story.get("headline", "")), quote=True)
-    cls = ' class="hide-mobile"' if hide_on_mobile else ""
-    img = (
-        f'<img src="{src}" alt="{alt}" width="{width}"{cls} '
-        f'style="width:100%;max-width:{width}px;height:auto;display:block;'
-        f'border:0;margin:0 0 {_IMAGE_GAP}px;">'
-    )
-    link_href = safe_url(story.get("url", ""))
-    if link_href == "#":
-        return img
-    return f'<a href="{html.escape(link_href, quote=True)}" style="display:block;">{img}</a>'
 
 
 def _read_more_link(url: str) -> str:
@@ -244,20 +210,12 @@ def _join_sections(sections: list[str]) -> str:
 
 # --- hero ---
 
-def _hero_content_html(hero: dict, nested: bool = False) -> str:
-    """The hero's own text (+ image) HTML: text left (64%) + image right
-    (36%, width 200, top-aligned) if the hero has an image; text-only
-    otherwise. Never a full-width banner image. The image column is
-    narrower than a plain 58/42 split because most article images are
-    ~16:9 and end up much shorter than the hero's own (longer) text
-    column - a narrower image column keeps that leftover blank space
-    smaller in absolute terms. `nested=True` when this is embedded inside
-    hero_flanked's own band, so it doesn't add its own outer padding/gap
-    on top of the flanking band's."""
+def _hero_content_html(hero: dict) -> str:
+    """The hero's own text HTML: kicker, headline, summary, read-more."""
     headline = html.escape(str(hero.get("headline", "")))
     summary = html.escape(clamp_summary(str(hero.get("summary", "")), _SUMMARY_LIMITS["lead"]))
     read_more = _read_more_link(hero.get("url", ""))
-    text_cell = (
+    return (
         _kicker_html(hero, 11)
         + f'<div style="font-family:{_SERIF};font-size:26px;line-height:1.22;'
         f'font-weight:700;color:{_INK};">{headline}</div>'
@@ -265,26 +223,16 @@ def _hero_content_html(hero: dict, nested: bool = False) -> str:
         + summary + _snippet_note(hero, 12) + '</div>'
         + (f'<div style="margin-top:{_HERO_GAP}px;">{read_more}</div>' if read_more else "")
     )
-    if not _has_image(hero):
-        return text_cell
-
-    image_cell = _linked_image_html(hero, 200)  # hero image is never hidden on mobile
-    if nested:
-        return _band_cols([text_cell, image_cell], widths=[64, 36], outer_pad=0, margin_bottom=0)
-    return _band_cols([text_cell, image_cell], widths=[64, 36])
 
 
 def hero_band(hero: dict) -> str:
     """Full-width hero: _hero_content_html, wrapped as its own band."""
-    content = _hero_content_html(hero)
-    if not _has_image(hero):
-        return _band(content)
-    return content  # already a complete band (image branch returns a full _band_cols table)
+    return _band(_hero_content_html(hero))
 
 
 def _flank_entry(story: dict) -> str:
     """Compact kicker + linked headline for a hero-flanking column - too
-    narrow for a summary or image."""
+    narrow for a summary."""
     kicker_html = _kicker_html(story, 9)
     headline = html.escape(str(story.get("headline", "")))
     safe = safe_url(story.get("url", ""))
@@ -301,26 +249,23 @@ def _flank_entry(story: dict) -> str:
 def hero_flanked(hero: dict, flank_left: dict, flank_right: dict) -> str:
     """The hero with one compact story column flanking it on each side.
     Only used when the wider canvas (see render_html) has two spare brief-
-    tier stories to flank with - the hero's own text+image proportions are
-    unchanged from hero_band; the flanks use the extra width the wider
-    canvas adds, not space taken out of the hero."""
+    tier stories to flank with - the hero's own proportions are unchanged
+    from hero_band; the flanks use the extra width the wider canvas adds,
+    not space taken out of the hero."""
     return _band_cols(
-        [_flank_entry(flank_left), _hero_content_html(hero, nested=True), _flank_entry(flank_right)],
+        [_flank_entry(flank_left), _hero_content_html(hero), _flank_entry(flank_right)],
         widths=[15, 70, 15],
     )
 
 
 # --- grid ---
 
-def _grid_card(story: dict, headline_px: int, summary_limit: int,
-                image_width: int, show_image: bool) -> str:
+def _grid_card(story: dict, headline_px: int, summary_limit: int) -> str:
     headline = html.escape(str(story.get("headline", "")))
     summary = html.escape(clamp_summary(str(story.get("summary", "")), summary_limit))
     read_more = _read_more_link(story.get("url", ""))
-    image_html = _linked_image_html(story, image_width, hide_on_mobile=True) if show_image else ""
     return (
-        image_html
-        + _kicker_html(story, 10)
+        _kicker_html(story, 10)
         + f'<div style="font-family:{_SERIF};font-size:{headline_px}px;line-height:1.3;'
         f'font-weight:700;color:{_INK};">{headline}</div>'
         + f'<div style="font-family:{_SERIF};font-size:13px;line-height:1.45;color:#3a3a3a;margin-top:{_CARD_GAP}px;">'
@@ -330,19 +275,12 @@ def _grid_card(story: dict, headline_px: int, summary_limit: int,
 
 
 def _grid_row_html(cards: list[dict]) -> str:
-    """One grid row. An image is shown on every card in the row only if
-    EVERY card in it has one - otherwise the whole row renders text-only,
-    never a mix. Image width depends on row size (3-up vs 2-up)."""
-    columns = len(cards)
-    show_image = all(_has_image(c) for c in cards)
-    image_width = 180 if columns == 3 else 240
+    """One grid row."""
     cells = [
         _grid_card(
             c,
             headline_px=17 if _tier_of(c) == 3 else 15,
             summary_limit=_SUMMARY_LIMITS[_tier_of(c)],
-            image_width=image_width,
-            show_image=show_image,
         )
         for c in cards
     ]
@@ -464,7 +402,7 @@ def render_html(stories: list[dict], title: str = "The Daily Digest", tagline: s
     weight-3/weight-2 stories packed into rows that never leave a lone
     card, a 2-column brief list for the rest, and a footer - each separated
     by a thin rule. Inline styles everywhere; the one <style> block holds
-    the mobile column-stacking and image-hiding rules."""
+    the mobile column-stacking rules."""
     if not stories:
         return ""
 
@@ -476,11 +414,6 @@ def render_html(stories: list[dict], title: str = "The Daily Digest", tagline: s
     for s in pool:
         tier = _tier_of(s)
         (majors if tier == 3 else standards if tier == 2 else briefs).append(s)
-
-    # Image-bearing stories first, so image cards land in the grid rather
-    # than being stranded without one when a row can't show images at all.
-    majors.sort(key=lambda s: not _has_image(s))
-    standards.sort(key=lambda s: not _has_image(s))
 
     grid_candidates = majors + standards
     grid_pool, overflow = grid_candidates[:MAX_CARDS - 1], grid_candidates[MAX_CARDS - 1:]

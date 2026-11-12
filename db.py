@@ -103,37 +103,3 @@ def seen_url(url: str) -> bool:
             (normalize_url(url),),
         ).fetchone()
     return row is not None
-
-
-if __name__ == "__main__":
-    import shutil
-    import tempfile
-    import json
-
-    tmp_dir = tempfile.mkdtemp()
-    DB_PATH = Path(tmp_dir) / "test_digest.db"
-
-    try:
-        init_db()
-        init_db()  # must be able to run twice without error
-
-        assert normalize_url("https://x.com/a/?utm_source=tw") == normalize_url("https://x.com/a")
-        assert normalize_url("https://x.com/read?id=5") != normalize_url("https://x.com/read?id=6")
-        assert normalize_url("http://X.com/a#top") == normalize_url("https://x.com/a")
-
-        first_id = save_story("tech", "Headline", "Summary", "https://x.com/a")
-        assert first_id is not None
-
-        dup_id = save_story("tech", "Headline again", "Summary", "https://x.com/a/?utm_source=tw")
-        assert dup_id is None
-
-        bad_update_id = save_story("tech", "Follow-up", "Summary", "https://x.com/b", update_of=999999)
-        assert bad_update_id is not None
-        bad_row = next(r for r in recent_stories() if r["id"] == bad_update_id)
-        assert bad_row["update_of"] is None
-
-        json.dumps(recent_stories())
-
-        print("all tests passed")
-    finally:
-        shutil.rmtree(tmp_dir, ignore_errors=True)

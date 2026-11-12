@@ -1,9 +1,14 @@
-"""test_images.py - unit tests for images.py. No network access required:
-all HTTP is replaced with injected fake `fetch` callables, and DNS
-resolution is replaced with a fake socket.getaddrinfo table.
+"""tests/test_images.py - unit tests for images.py. No network access
+required: all HTTP is replaced with injected fake `fetch` callables, and
+DNS resolution is replaced with a fake socket.getaddrinfo table.
 
-Run with: python test_images.py
+Run with: python tests/test_images.py
 """
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent.parent))  # project root, for `import images`
+
 import socket
 import time
 import unittest

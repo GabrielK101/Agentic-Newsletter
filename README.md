@@ -42,12 +42,25 @@ Article images are hotlinked directly from the publisher's own site, not re-host
 
 - `registry.py` - the `@tool` decorator, tool registry, and the `run_tool`/`schemas` dispatcher used by the agent loop.
 - `tools.py` - the tools themselves: `read_feed`, `find_feed`, `fetch_article`, `search_web`.
-- `digest.py` - the agent loop: calls the model with the tool schemas, executes whatever tools it asks for, parses and filters the result, and hands it off for delivery.
+- `digest.py` - orchestration and the CLI entry point: loads config, runs the pipeline end to end, hands the result off for delivery.
+- `agent_loop.py` - the model-facing tool-use loop: the SYSTEM prompt, building the request, and the turn-by-turn loop itself.
+- `fixtures.py` - canned test stories for exercising rendering/delivery without calling the model or any tools (`--fixture`).
 - `images.py` - finds a representative article image per story, code-only (no model calls), with SSRF-safe fetching.
 - `config.py` / `config.yaml` - loads and validates the run config (lookback window, history window, topics, sites, images on/off).
 - `db.py` - SQLite storage for past stories, used to dedupe and to report follow-ups.
 - `storage.py` - syncs the DB file to/from a remote backend before/after a run (currently local-only; `s3`/`gcs` are stubs).
-- `delivery.py` - delivers the finished digest (currently local-only: stdout + dated files under `digests/`; `email`/`webhook` are stubs).
+- `delivery.py` - delivery mechanics: saves files, builds and sends the email.
+- `newsletter_render.py` - the HTML/text layout engine that turns stories into the rendered digest.
+- `tests/` - standalone test scripts, each runnable directly (no test runner required): `test_db.py`, `test_images.py`.
+
+## Tests
+
+```
+python tests/test_db.py
+python tests/test_images.py
+```
+
+Both are self-contained (no network access, no real `digest.db` touched) and print `all tests passed` / the standard `unittest` summary on success.
 
 ## Roadmap
 

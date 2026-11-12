@@ -112,12 +112,36 @@ def sync_up() -> None:
 
 def _latest_digest_files(out_dir: Path) -> list[Path]:
     """The .md/.json/.html files from the most recently written run (they
-    all share one timestamp stem - see delivery.py's _unique_stem)."""
-    html_files = sorted(out_dir.glob("*.html"), key=lambda p: p.stat().st_mtime)
+    all share one timestamp stem - see delivery.py's _unique_stem).
+    Excludes *.web.html: it shares the stem but isn't one of this trio -
+    Path.stem would otherwise strip only the last suffix and leave a
+    stem of "<stem>.web", breaking the lookup below."""
+    html_files = sorted(
+        (p for p in out_dir.glob("*.html") if not p.name.endswith(".web.html")),
+        key=lambda p: p.stat().st_mtime,
+    )
     if not html_files:
         return []
     stem = html_files[-1].stem
     return [out_dir / f"{stem}{ext}" for ext in (".md", ".json", ".html") if (out_dir / f"{stem}{ext}").exists()]
+
+
+def upload_web(filename: str, html: str) -> None:
+    """DIGEST_STORAGE=gcs and DIGEST_ARCHIVE=true only: upload the web
+    edition's HTML to gs://<bucket>/web/<filename>. A no-op otherwise, so
+    callers (delivery.py) can always call this without checking env vars
+    themselves. Does not touch the bucket's public-access settings -
+    whether gs://.../web/ is actually reachable at DIGEST_WEB_BASE_URL is
+    an infra decision, not this function's job."""
+    if _backend() != "gcs" or os.environ.get("DIGEST_ARCHIVE", "").lower() != "true":
+        return
+
+    from google.cloud import storage as gcs_storage
+
+    bucket_name, _ = _gcs_bucket_and_object()
+    blob = gcs_storage.Client().bucket(bucket_name).blob(f"web/{filename}")
+    blob.upload_from_string(html, content_type="text/html")
+    print(f"[storage] uploaded web edition to gs://{bucket_name}/web/{filename}")
 
 
 def _archive_digest_files(bucket) -> None:

@@ -22,10 +22,11 @@ Fill in `ANTHROPIC_API_KEY` and `TAVILY_API_KEY` in `.env`, and edit `config.yam
 - `DIGEST_STORAGE` - `local` (default, no-op), `gcs`, or `s3` (the latter is an unimplemented stub). `gcs` also needs:
   - `DIGEST_GCS_BUCKET` - required when `DIGEST_STORAGE=gcs`.
   - `DIGEST_DB_OBJECT` - object name within the bucket. Defaults to `digest.db`.
-  - `DIGEST_ARCHIVE` - `true` to also upload each run's saved `.md`/`.json`/`.html` to `gs://<bucket>/digests/`. Defaults off.
+  - `DIGEST_ARCHIVE` - `true` to also upload each run's saved `.md`/`.json`/`.html` (and the web edition, if one was rendered) to `gs://<bucket>/digests/` and `gs://<bucket>/web/`. Defaults off. Uploading does not make the bucket public - that's a separate infra decision.
   - Auth is Application Default Credentials only - no key files. On GCP compute this is automatic; locally, `gcloud auth application-default login`.
 - `DIGEST_DELIVERY` - `local` (default: print + files under `digests/`) or `email` (requires `GMAIL_USER`, `GMAIL_APP_PASSWORD`, and a recipient - see `DIGEST_TO` below).
 - `DIGEST_TO` - who the email goes to. Overridable per-config with `recipient` in `config.yaml` (`DIGEST_TO` is the fallback if that's unset).
+- `DIGEST_WEB_BASE_URL` - optional. If set, the `email` backend sends a short teaser (masthead, lead headline + dek, secondary headlines, a button to the web edition) that links to `{DIGEST_WEB_BASE_URL}/{web edition filename}`, instead of the full layout. Unset by default - the full email is sent unchanged.
 
 ## Running
 

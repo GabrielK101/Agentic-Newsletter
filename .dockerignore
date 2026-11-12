@@ -6,6 +6,7 @@ config.example.yaml
 
 # Local runtime state / dev artifacts.
 digests/
+design/
 *.db
 *.sqlite
 *.sqlite3

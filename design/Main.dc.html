@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>The Daily Roundup</title>
+<script src="./vendor/react.js"></script>
+<script src="./vendor/react-dom.js"></script>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=UnifrakturMaguntia&amp;family=Playfair+Display:ital,wght@0,700;0,900;1,700&amp;family=Libre+Caslon+Text:ital,wght@0,400;0,700;1,400&amp;family=Inter:wght@500;700&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#e9e4d8}
+a{color:#7a1f12}a:hover{color:#4a120a}
+.np{font-family:'Libre Caslon Text',Georgia,serif;color:#1b1a17}
+.np p{margin:0 0 10px 0;font-size:14.5px;line-height:1.5;text-align:justify;hyphens:auto}
+.kicker{font-family:'Inter',sans-serif;font-weight:700;font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:#7a1f12;margin:0 0 6px 0}
+.hd{font-family:'Playfair Display',Georgia,serif;font-weight:900;line-height:1.05;margin:0 0 8px 0}
+.dek{font-family:'Playfair Display',Georgia,serif;font-style:italic;font-weight:700;font-size:19px;line-height:1.3;margin:0 0 12px 0;color:#3a3833}
+.rule{border:0;border-top:1px solid #1b1a17;margin:14px 0}
+.sec{font-family:'Playfair Display',Georgia,serif;font-weight:900;font-size:15px;letter-spacing:.2em;text-transform:uppercase;border-top:3px double #1b1a17;border-bottom:1px solid #1b1a17;padding:6px 0;margin:0 0 12px 0;text-align:center}
+.col{display:flex;flex-direction:column}
+.brief{margin:0 0 12px 0;padding:0 0 12px 0;border-bottom:1px solid #b9b2a3}
+.brief:last-child{border-bottom:0}
+.brief h4{font-family:'Playfair Display',Georgia,serif;font-weight:700;font-size:18px;line-height:1.15;margin:0 0 5px 0}
+.brief p{font-size:13.5px;margin:0}
+.score{display:flex;justify-content:space-between;font-family:'Inter',sans-serif;font-size:13px;padding:5px 0;border-bottom:1px dotted #9d9686}
+.score b{font-weight:700}
+.tick{display:flex;flex-direction:column;gap:2px;font-family:'Inter',sans-serif;font-size:12px}
+.tick span:first-child{font-weight:700;letter-spacing:.06em;text-transform:uppercase;font-size:10.5px;color:#4b4840}
+.up{color:#1d5e2f;font-weight:700}
+.dn{color:#8e1d10;font-weight:700}
+</style>
+</helmet>
+<div class="np" style="width: 1240px; height: 2150px; box-sizing: border-box; padding: 40px 52px; background: {{paper}}; display: flex; flex-direction: column">
+
+<div style="display: flex; justify-content: space-between; align-items: flex-end; font-family: 'Inter', sans-serif; font-size: 12px; letter-spacing: .08em; text-transform: uppercase; color: #4b4840">
+<span>London Edition</span>
+<span>Vol. I · No. 1</span>
+<span>Price: one prompt</span>
+</div>
+<hr class="rule" style="margin: 8px 0 0 0">
+<h1 style="font-family: 'UnifrakturMaguntia', serif; font-weight: 400; font-size: 104px; line-height: 1; text-align: center; margin: 14px 0 6px 0; color: {{ink}}">The Daily Roundup</h1>
+<div style="border-top: 3px double #1b1a17; border-bottom: 1px solid #1b1a17; padding: 7px 0; display: flex; justify-content: space-between; font-family: 'Inter', sans-serif; font-size: 12.5px; letter-spacing: .06em; text-transform: uppercase">
+<span>Thursday, 12 November 2026</span>
+<span>News · Markets · Technology · Sport</span>
+<span>Compiled by Claude from public reports</span>
+</div>
+
+<div style="display: grid; grid-template-columns: repeat(6, 1fr); gap: 18px; padding: 10px 0; border-bottom: 1px solid #1b1a17; margin-bottom: 22px">
+<div class="tick"><span>S&amp;P 500</span><span>7,619.38 <span class="up">▲ 1.31%</span></span></div>
+<div class="tick"><span>Nasdaq</span><span>25,466.19 <span class="up">▲ 1.60%</span></span></div>
+<div class="tick"><span>Dow</span><span>52,486.49 <span class="up">▲ 0.49%</span></span></div>
+<div class="tick"><span>Brent crude</span><span>~$93/bbl <span class="dn">▼ 20% in Nov</span></span></div>
+<div class="tick"><span>US 10-yr</span><span>4.98% (Tue)</span></div>
+<div class="tick"><span>VIX</span><span>17.49 <span class="up">calmer</span></span></div>
+</div>
+
+<div style="display: grid; grid-template-columns: 2fr 1fr; gap: 32px">
+<div class="col" style="border-right: 1px solid #1b1a17; padding-right: 32px">
+<p class="kicker">Technology · Breaking</p>
+<h2 class="hd" style="font-size: 64px; color: {{ink}}">Huang Quits Nvidia as Scandal Engulfs Chip Giant</h2>
+<p class="dek">Co-founder resigns as chief executive and director "effective immediately"; finance chief Colette Kress named interim CEO</p>
+<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 24px">
+<div>
+<p>Jensen Huang, the co-founder who steered Nvidia to the centre of the AI boom, has resigned as president, chief executive and board member, the company said in a regulatory filing on Thursday. Colette Kress, CFO since 2013, will run the company on an interim basis while keeping her finance role, and the board will look at internal and external candidates for a permanent successor.</p>
+<p>In a governance first, Harvey C. Jones was named the board's inaugural independent chair. The board said operations, customer commitments and the product roadmap would continue without interruption.</p>
+</div>
+<div>
+<p>The exit follows days of turmoil. The Wall Street Journal reported the board was moving to oust Huang, and the New York Times reported a relationship with an executive who reported to him. Further reports linked the affair to an alleged Chinese spy, and NBC said a former prosecutor will investigate for the company.</p>
+<p>Shares, which fell sharply as the reports broke, have whipsawed all week. Investors now face a company worth trillions without the founder who has run it since 1993.</p>
+</div>
+</div>
+<hr class="rule">
+<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 24px">
+<div>
+<p class="kicker">US Politics</p>
+<h3 class="hd" style="font-size: 30px">Colom Flips Mississippi in Senate Upset</h3>
+<p>After more than a week of counting, Democrat Scott Colom has narrowly won Mississippi's Senate race, NPR reports — a major upset in one of the reddest states in the country, and the latest blow in a midterm cycle that handed Democrats Congress.</p>
+<p>Meanwhile the White House warned Rep. Robert Garcia it could pursue criminal referrals over planned House oversight probes, setting up an early clash with the incoming majority.</p>
+</div>
+<div>
+<p class="kicker">Markets</p>
+<h3 class="hd" style="font-size: 30px">CoreWeave Sparks AI Rebound on Wall Street</h3>
+<p>Stocks rallied on Wednesday after CoreWeave's beat-and-raise quarter revived the AI trade. CoreWeave closed almost 25% higher, every member of the Philadelphia chip index rose, and the Nasdaq-100 jumped 2.3%, leaving the S&amp;P 500 within about 2.6% of its record.</p>
+<p>The bounce more than erased Tuesday's dip on a hot inflation print, which had pushed the 10-year Treasury yield to 4.98%.</p>
+</div>
+</div>
+</div>
+
+<div class="col">
+<p class="sec" style="margin-top: 0">The Gulf</p>
+<p class="kicker">World</p>
+<h3 class="hd" style="font-size: 32px">"We've Got Their Strait": Trump Says No Iran Deal Needed</h3>
+<p>Oil turned choppy after President Trump said the US did not need a deal with Iran, reviving fears that the war will drag on. Brent traded near $93 on Thursday, though it is still down about a fifth for November.</p>
+<p>The Strait of Hormuz remains effectively shut: IMF PortWatch logged just three transits on 8 November against a pre-crisis norm of about 85 a day, and Iran's Revolutionary Guards said two supertankers were disabled by mines on Wednesday night. Iran also denied reports of talks in Qatar.</p>
+<p>Treasury Secretary Scott Bessent and his family have moved to a military base amid Iranian threats, and US prosecutors charged three men over an alleged plot against a UK air base.</p>
+<hr class="rule">
+<p class="kicker">Diplomacy</p>
+<h4 class="hd" style="font-size: 22px">Moscow and Kyiv Agree Prisoner Swap</h4>
+<p>Russia and Ukraine agreed an exchange after two days of US-brokered talks in Abu Dhabi that ended without a broader breakthrough. Envoys Steve Witkoff and Jared Kushner landed in Moscow on Thursday to meet Vladimir Putin.</p>
+</div>
+</div>
+
+<div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 28px; margin-top: 26px">
+
+<div class="col">
+<p class="sec">Business &amp; Tech</p>
+<div class="brief"><h4>Anthropic IPO Book Covered Several Times</h4><p>Orders for the 825 million shares on offer at $70–$78 already exceed supply many times over, Bloomberg reports. The Nasdaq listing under "ANT" is reportedly set to price on 18 November and trade the next day — on track to be the largest debut ever. (Disclosure: Anthropic makes Claude, which compiled this page.)</p></div>
+<div class="brief"><h4>United Bars AI Agents From Booking</h4><p>United Airlines will block personal AI assistants from buying tickets, per the WSJ — an early front in the fight over agentic shopping.</p></div>
+<div class="brief"><h4>Briefly in Silicon Valley</h4><p>Google launched a Gemini "Decisions" API; DeepMind released AlphaGenome 2 for non-commercial research; and England's university regulator warned AI has made coursework almost impossible to grade fairly.</p></div>
+</div>
+
+<div class="col">
+<p class="sec">Britain</p>
+<div class="brief"><h4>Two Convicted Over Iranian Spy Plot</h4><p>Mostafa Sepahvand and Farhad Javadi Manesh were found guilty of helping Iranian intelligence by surveilling London-based Iran International journalists and others.</p></div>
+<div class="brief"><h4>Burnham's Rosebank Test</h4><p>The PM has reaffirmed his climate pledges, but a looming ruling on the Rosebank oil field is shaping up as a tricky parliamentary moment.</p></div>
+<div class="brief"><h4>BBC Must Face Trump Suit</h4><p>A judge ruled Donald Trump's defamation claim over a Panorama edit can proceed.</p></div>
+<div class="brief"><h4>Also</h4><p>NHS hospital delays in England have worsened, and a far-right activist admitted damaging a migrant dinghy in the Channel.</p></div>
+</div>
+
+<div class="col">
+<p class="sec">Sport</p>
+<div class="brief"><h4>United Sack Carrick; Pochettino Lined Up</h4><p>Manchester United dismissed Michael Carrick after their worst start in the Premier League era left them in the relegation zone after 10 games. USA boss Mauricio Pochettino has agreed to take over, Sky Sports reports.</p></div>
+<div class="brief"><h4>Arsenal Pull Clear, City Slide</h4><p>Arsenal sit five points clear after a 1–0 win over Hull, while Manchester City lost a third straight league game at Forest. Palace are bottom.</p></div>
+<div class="brief"><h4>Turin Without Sinner</h4><p>The ATP Finals start Sunday with injured champion Jannik Sinner absent; Alexander Zverev leads the field and breakout Spaniard Rafael Jódar took the final spot.</p></div>
+<div style="margin-top: 2px">
+<p class="kicker" style="margin-bottom: 4px">NBA · Wednesday</p>
+<div class="score"><span>Cavaliers <b>115</b></span><span>Knicks 107</span></div>
+<div class="score"><span>Celtics <b>98</b></span><span>Raptors 93</span></div>
+<div class="score"><span>Rockets <b>113</b></span><span>Warriors 97</span></div>
+<div class="score"><span>Nets <b>145</b></span><span>Pelicans 111</span></div>
+<div class="score"><span>Pacers <b>114</b></span><span>Wizards 101</span></div>
+</div>
+</div>
+
+<div class="col">
+<p class="sec">Elsewhere</p>
+<div class="brief"><h4>Deadly Collapse in New York</h4><p>A building collapse in New York City killed two people and left others trapped as rescuers searched the rubble.</p></div>
+<div class="brief"><h4>Spain Strikes, Portugal Battens Down</h4><p>A nationwide general strike in Spain ended in clashes in Barcelona, while Portugal shut schools and non-essential services as Storm Charles hit.</p></div>
+<div class="brief"><h4>Pope Leo Draws Huge Crowd</h4><p>Reports put attendance at Pope Leo XIV's Buenos Aires mass in the millions, with President Milei moved to tears.</p></div>
+<div class="brief"><h4>A Dress With History</h4><p>Princess Diana's famous "Revenge Dress" has gone on public display ahead of auction.</p></div>
+</div>
+
+</div>
+
+<div style="margin-top: auto; border-top: 3px double #1b1a17; padding-top: 8px; display: flex; justify-content: space-between; font-family: 'Inter', sans-serif; font-size: 11px; letter-spacing: .05em; color: #4b4840">
+<span>Sources: NVIDIA 8-K, NPR, Bloomberg, CNBC, WSJ, NYT, Reuters, Sky Sports, AFP, Euronews, ESPN/CBS Sports, TheStreet, Yahoo Finance.</span>
+<span>Market figures: Wednesday 11 Nov close unless noted.</span>
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"paper":{"editor":"color","default":"#f6f1e4"},"ink":{"editor":"color","default":"#1b1a17"},"$preview":{"width":1240,"height":2150}}'>
+class Component extends DCLogic {
+renderVals() {
+return { paper: this.props.paper ?? '#f6f1e4', ink: this.props.ink ?? '#1b1a17' };
+}
+}
+</script>
+</body>
+</html>

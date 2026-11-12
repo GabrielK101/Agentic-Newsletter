@@ -315,7 +315,13 @@ if __name__ == "__main__":
         digest.get("ticker", []), digest.get("scoreboard", []), digest.get("sources", []),
         digest.get("disclosure"), history,
     )
-    deliver(rendered, stories, title=config["title"], tagline=config["tagline"], recipient=config["recipient"])
+    front_page = {
+        "lead": lead, "secondary": secondary, "sections": sections,
+        "ticker": digest.get("ticker", []), "scoreboard": digest.get("scoreboard", []),
+        "sources": digest.get("sources", []), "disclosure": digest.get("disclosure"),
+    }
+    deliver(rendered, stories, title=config["title"], tagline=config["tagline"],
+            recipient=config["recipient"], front_page=front_page)
 
     if not DRY_RUN:
         if lead is not None:

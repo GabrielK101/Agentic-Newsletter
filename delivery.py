@@ -1,16 +1,17 @@
 """delivery.py - deliver the finished digest.
 
 Backend chosen by env DIGEST_DELIVERY (local|email). "local" is the default:
-print to stdout and write dated files under digests/. "email" additionally
-sends via Gmail SMTP, using stdlib only.
+print to stdout and write dated files under digests/ (including a
+webpage.py web edition, alongside the email-style .md/.json/.html). "email"
+additionally sends via Gmail SMTP, using stdlib only.
 
-The HTML side is ONE adaptive front-page layout, not a choice of styles:
-masthead -> hero -> a grid of up to MAX_CARDS-1 cards (weight-3 stories
-first, then weight-2, packed into rows of 3 that never leave a lone card)
--> a 2-column brief list for everything else -> a footer. Every band is a
-full-width table so columns inside it always end together, and a thin rule
-separates each major section. The model never chooses layout - it only
-supplies "lead" and "weight"; everything else here is deterministic.
+The email HTML side is ONE adaptive front-page layout, not a choice of
+styles: masthead -> hero -> a grid of up to MAX_CARDS-1 cards (weight-3
+stories first, then weight-2, packed into rows of 3 that never leave a
+lone card) -> a 2-column brief list for everything else -> a footer. Every
+band is a full-width table so columns inside it always end together, and a
+thin rule separates each major section. The model never chooses layout -
+it only supplies "lead" and "weight"; everything else here is deterministic.
 """
 import json
 import os
@@ -23,17 +24,22 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 from newsletter_render import render_html, render_text
+from webpage import render_web
 
 load_dotenv()
 
 
 def deliver(markdown: str, stories: list[dict], title: str = "The Daily Digest",
-            tagline: str | None = None, recipient: str | None = None) -> None:
+            tagline: str | None = None, recipient: str | None = None,
+            front_page: dict | None = None) -> None:
     """Deliver the rendered digest and its stories. `recipient` (email
-    backend only) falls back to env DIGEST_TO if not given."""
+    backend only) falls back to env DIGEST_TO if not given. `front_page`
+    is the same already-filtered front-page shape passed to the email
+    layout - when given, a web edition is also written to digests/
+    alongside the usual .md/.json/.html files."""
     backend = os.environ.get("DIGEST_DELIVERY", "local")
     if backend == "local":
-        _deliver_local(markdown, stories, title, tagline)
+        _deliver_local(markdown, stories, title, tagline, front_page)
         return
     if backend == "email":
         _deliver_email(markdown, stories, title, tagline, recipient)
@@ -52,10 +58,12 @@ def _unique_stem(out_dir: Path, base: str) -> str:
     return stem
 
 
-def _save_files(markdown: str, stories: list[dict],
-                 title: str, tagline: str | None) -> tuple[Path, Path, Path, str]:
-    """Write the .md/.json/.html files under digests/. Returns their paths
-    and the rendered HTML, so a failed send still leaves the files in place."""
+def _save_files(markdown: str, stories: list[dict], title: str, tagline: str | None,
+                 front_page: dict | None = None) -> tuple[Path, Path, Path, str, Path | None]:
+    """Write the .md/.json/.html files under digests/, plus a .web.html
+    web edition (same stem) when `front_page` is given. Returns their
+    paths and the rendered email HTML, so a failed send still leaves the
+    files in place."""
     out_dir = Path("digests")
     out_dir.mkdir(exist_ok=True)
     stem = _unique_stem(out_dir, datetime.now().strftime("%Y-%m-%d_%H%M%S"))
@@ -69,16 +77,24 @@ def _save_files(markdown: str, stories: list[dict],
     json_path.write_text(json.dumps(stories, indent=2, ensure_ascii=False), encoding="utf-8")
     html_path.write_text(html_content, encoding="utf-8")
 
-    return md_path, json_path, html_path, html_content
+    web_path = None
+    if front_page is not None:
+        web_path = out_dir / f"{stem}.web.html"
+        web_path.write_text(render_web(front_page, title=title, tagline=tagline), encoding="utf-8")
+
+    return md_path, json_path, html_path, html_content, web_path
 
 
-def _deliver_local(markdown: str, stories: list[dict], title: str, tagline: str | None) -> None:
+def _deliver_local(markdown: str, stories: list[dict], title: str, tagline: str | None,
+                    front_page: dict | None = None) -> None:
     print(markdown)
 
-    md_path, json_path, html_path, _ = _save_files(markdown, stories, title, tagline)
+    md_path, json_path, html_path, _, web_path = _save_files(markdown, stories, title, tagline, front_page)
     print(f"\n[saved] {md_path}")
     print(f"[saved] {json_path}")
     print(f"[saved] {html_path}")
+    if web_path is not None:
+        print(f"[saved] {web_path}")
 
 
 def _deliver_email(markdown: str, stories: list[dict], title: str,
@@ -87,7 +103,7 @@ def _deliver_email(markdown: str, stories: list[dict], title: str,
         print("No new stories, email skipped")
         return
 
-    md_path, json_path, html_path, html_content = _save_files(markdown, stories, title, tagline)
+    md_path, json_path, html_path, html_content, _ = _save_files(markdown, stories, title, tagline)
     print(f"[saved] {md_path}")
     print(f"[saved] {json_path}")
     print(f"[saved] {html_path}")

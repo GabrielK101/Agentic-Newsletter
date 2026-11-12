@@ -53,7 +53,9 @@ python digest.py --check             # validate config/env only - no model, tool
 - `db.py` - SQLite storage for past stories, used to dedupe and to report follow-ups.
 - `storage.py` - syncs the DB file to/from a remote backend before/after a run (currently local-only; `s3`/`gcs` are stubs).
 - `delivery.py` - delivery mechanics: saves files, builds and sends the email.
-- `newsletter_render.py` - the HTML/text layout engine that turns stories into the rendered digest.
+- `newsletter_render.py` - the HTML/text layout engine that turns stories into the rendered email.
+- `webpage.py` - the web edition: one self-contained HTML page (inline CSS, Google Fonts links) built from the same front-page shape as the email, saved alongside it under `digests/` (`DIGEST_DELIVERY=local` only).
+- `design/` - a design-tool mockup of the web edition's look - reference only, not runtime code.
 - `tests/` - standalone test scripts, each runnable directly (no test runner required): `test_db.py`.
 - `config.prod.yaml` - committed, non-secret production config baked into the Docker image.
 - `Dockerfile` / `.dockerignore` - container image for running the job on a schedule. Not deployed anywhere yet.

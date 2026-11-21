@@ -277,25 +277,22 @@ def run_check() -> int:
     if storage_backend == "gcs" and os.environ.get("DIGEST_GCS_BUCKET"):
         print("[check] GCS bucket:")
         try:
-            from google.api_core.exceptions import NotFound
             from google.cloud import storage as gcs_storage
 
             bucket_name = os.environ["DIGEST_GCS_BUCKET"]
             object_name = os.environ.get("DIGEST_DB_OBJECT", "digest.db")
-            bucket = gcs_storage.Client().bucket(bucket_name)
-            if not bucket.exists():
-                print(f"  FAIL - bucket gs://{bucket_name} is not reachable or does not exist")
-                ok = False
+            # Object-level only (blob.exists(), never bucket.exists()) -
+            # the runtime service account only has roles/storage.objectAdmin,
+            # which doesn't cover storage.buckets.get. A missing object is
+            # fine (first run); exists() itself raises on a real access
+            # problem (403, network error), caught below.
+            blob = gcs_storage.Client().bucket(bucket_name).blob(object_name)
+            if blob.exists():
+                print(f"  OK - DB object '{object_name}' exists in gs://{bucket_name}")
             else:
-                print(f"  OK - bucket gs://{bucket_name} is reachable")
-                blob = bucket.blob(object_name)
-                try:
-                    blob.reload()
-                    print(f"  OK - DB object '{object_name}' exists, {blob.size} bytes")
-                except NotFound:
-                    print(f"  OK - DB object '{object_name}' does not exist yet (first run will start fresh)")
+                print(f"  OK - DB object '{object_name}' does not exist yet in gs://{bucket_name} (first run will start fresh)")
         except Exception as e:
-            print(f"  FAIL - could not verify GCS bucket: {type(e).__name__}: {e}")
+            print(f"  FAIL - could not verify GCS access: {type(e).__name__}: {e}")
             ok = False
 
     print(f"\n[check] {'all checks passed' if ok else 'one or more checks failed'}")

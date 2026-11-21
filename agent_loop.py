@@ -9,7 +9,10 @@ from datetime import datetime
 
 import anthropic
 
-from newsletter_render import clamp_summary, safe_url
+from newsletter_render import (
+    SUMMARY_CEILING_BRIEF, SUMMARY_CEILING_HERO, SUMMARY_CEILING_MAJOR,
+    clamp_summary, clean_summary, safe_url,
+)
 from registry import run_tool, schemas
 
 MODEL = "claude-sonnet-4-6"
@@ -53,6 +56,11 @@ SYSTEM = """You are a news editor building a daily digest for one reader.
   guarantee coverage; they do not limit what can lead.
 - "secondary" is the next 2-3 most newsworthy stories, from any topic.
   Everything else that earns a place becomes a brief in its section.
+- Every story, including briefs, needs a summary that says what happened
+  and why it matters; a headline alone is never enough. Use one sentence
+  if the story is self-explanatory, and two or three if the reader needs
+  background (legal cases, mergers, long conflicts, anything that assumes
+  prior knowledge). Decide per story.
 
 ## Honesty
 - Only state what the tool results support. Never invent details.
@@ -87,7 +95,7 @@ after it. Shape - a newspaper front page, not a flat list:
     "topic": "<one of the topic names given, or 'World'/'Worth knowing'>",
     "headline": "...",
     "dek": "<one-line subhead that expands on the headline>",
-    "body": "<2-3 short paragraphs, at most 160 words total>",
+    "body": "<one sentence to 2-3 short paragraphs, roughly 8-110 words - what happened and why it matters>",
     "url": "...",
     "sources": ["<outlet name>", "..."],
     "published": "<YYYY-MM-DD from the tool result, or null if none was given>",
@@ -95,7 +103,8 @@ after it. Shape - a newspaper front page, not a flat list:
   },
   "secondary": [
     {
-      "topic": "...", "headline": "...", "summary": "<at most 40 words>",
+      "topic": "...", "headline": "...",
+      "summary": "<one sentence to a few, roughly 8-70 words - what happened and why it matters>",
       "url": "...", "published": "...", "update_of": null
     }
   ],
@@ -104,8 +113,9 @@ after it. Shape - a newspaper front page, not a flat list:
       "name": "<topic name, or 'World'/'Worth knowing'>",
       "briefs": [
         {
-          "headline": "...", "summary": "<at most 40 words>", "url": "...",
-          "published": "...", "update_of": null
+          "headline": "...",
+          "summary": "<one or two sentences, roughly 8-25 words - what happened and why it matters>",
+          "url": "...", "published": "...", "update_of": null
         }
       ]
     }
@@ -216,9 +226,7 @@ def run_agent(config: dict, history: list[dict]) -> tuple[str, bool, dict]:
     return "".join(b.text for b in resp.content if b.type == "text"), False, usage
 
 
-_MAX_WORDS_DEK = 30
-_MAX_WORDS_BODY = 160
-_MAX_WORDS_SUMMARY = 40
+_MAX_WORDS_DEK = 30  # the one-line subhead - not one of the 4 summary tiers
 _MAX_SECONDARY = 5
 _MAX_SECTIONS = 6
 _MAX_BRIEFS_PER_SECTION = 6
@@ -243,10 +251,11 @@ def _clean_id(value) -> int | None:
     return value if isinstance(value, int) and not isinstance(value, bool) else None
 
 
-def _clean_story_item(item, summary_words: int) -> dict | None:
+def _clean_story_item(item, ceiling: int) -> dict | None:
     """Shared cleaning for secondary items and section briefs: headline and
     a usable url are required - an item missing either is dropped as
-    malformed - plus an optional summary/published/update_of."""
+    malformed; the summary is clamped to `ceiling` words and must clear
+    SUMMARY_WORD_FLOOR (clean_summary) or the whole item is dropped."""
     if not isinstance(item, dict):
         return None
     headline = _clean_str(item.get("headline"))
@@ -255,9 +264,12 @@ def _clean_story_item(item, summary_words: int) -> dict | None:
     url = safe_url(item.get("url", ""))
     if url == "#":
         return None
+    summary = clean_summary(headline, item.get("summary", ""), ceiling)
+    if summary is None:
+        return None
     return {
         "headline": headline,
-        "summary": _clean_str(item.get("summary"), summary_words) or "",
+        "summary": summary,
         "url": url,
         "published": item.get("published") if isinstance(item.get("published"), str) else None,
         "update_of": _clean_id(item.get("update_of")),
@@ -273,13 +285,16 @@ def _clean_lead(raw) -> dict | None:
     url = safe_url(raw.get("url", ""))
     if url == "#":
         return None
+    body = clean_summary(headline, raw.get("body", ""), SUMMARY_CEILING_HERO)
+    if body is None:
+        return None
     sources_raw = raw.get("sources")
     sources = [s.strip() for s in sources_raw if isinstance(s, str) and s.strip()] if isinstance(sources_raw, list) else []
     return {
         "topic": _clean_str(raw.get("topic")) or "",
         "headline": headline,
         "dek": _clean_str(raw.get("dek"), _MAX_WORDS_DEK) or "",
-        "body": _clean_str(raw.get("body"), _MAX_WORDS_BODY) or "",
+        "body": body,
         "url": url,
         "sources": sources[:8],
         "published": raw.get("published") if isinstance(raw.get("published"), str) else None,
@@ -288,7 +303,7 @@ def _clean_lead(raw) -> dict | None:
 
 
 def _clean_secondary_item(raw) -> dict | None:
-    cleaned = _clean_story_item(raw, _MAX_WORDS_SUMMARY)
+    cleaned = _clean_story_item(raw, SUMMARY_CEILING_MAJOR)
     if cleaned is None:
         return None
     cleaned["topic"] = _clean_str(raw.get("topic")) or ""
@@ -304,7 +319,7 @@ def _clean_section(raw) -> dict | None:
     briefs = []
     if isinstance(raw.get("briefs"), list):
         for b in raw["briefs"][:_MAX_BRIEFS_PER_SECTION]:
-            cleaned = _clean_story_item(b, _MAX_WORDS_SUMMARY)
+            cleaned = _clean_story_item(b, SUMMARY_CEILING_BRIEF)
             if cleaned is not None:
                 briefs.append(cleaned)
     return {"name": name, "briefs": briefs}

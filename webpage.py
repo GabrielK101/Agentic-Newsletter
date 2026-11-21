@@ -5,12 +5,17 @@ spacing, rules) in plain HTML/CSS - no React, no build step - built from
 the same already-filtered front-page shape the email renderer uses
 (see digest.py's prepare_front_page). Every text field is escaped; every
 href goes through safe_url first. Collapses to 2 columns, then 1, on
-narrower screens.
+narrower screens. Every kicker shows a relative date (Today/Yesterday/
+Thu 19 Nov) alongside the topic, computed in code - see
+newsletter_render.format_relative_date.
 """
 import html
 from datetime import date as date_cls
 
-from newsletter_render import clamp_summary, safe_url
+from newsletter_render import (
+    SUMMARY_CEILING_BRIEF, SUMMARY_CEILING_HERO, SUMMARY_CEILING_MAJOR,
+    clamp_summary, format_relative_date, safe_url,
+)
 
 _BODY_BG = "#e9e4d8"
 _PAPER = "#f6f1e4"
@@ -23,9 +28,9 @@ _RULE_DOTTED = "#9d9686"
 _UP = "#1d5e2f"
 _DOWN = "#8e1d10"
 
-_LEAD_BODY_WORDS = 160
-_SECONDARY_SUMMARY_WORDS = 60
-_BRIEF_SUMMARY_WORDS = 60
+_LEAD_BODY_WORDS = SUMMARY_CEILING_HERO
+_SECONDARY_SUMMARY_WORDS = SUMMARY_CEILING_MAJOR
+_BRIEF_SUMMARY_WORDS = SUMMARY_CEILING_BRIEF
 
 _FONTS_HREF = (
     "https://fonts.googleapis.com/css2?family=UnifrakturMaguntia"
@@ -141,6 +146,14 @@ def _kicker_html(text: str) -> str:
     return f'<p class="kicker">{_esc(text.upper())}</p>' if text else ""
 
 
+def _kicker_for(item: dict) -> str:
+    """The kicker text for `item`: its topic and a relative date
+    ("Today"/"Yesterday"/"Thu 19 Nov"), joined by " · " - only the
+    parts that actually exist."""
+    parts = [p for p in (item.get("topic", ""), format_relative_date(item.get("published"))) if p]
+    return " · ".join(parts)
+
+
 def _paragraphs(body: str) -> list[str]:
     return [p.strip() for p in (body or "").split("\n\n") if p.strip()]
 
@@ -169,7 +182,7 @@ def _lead_html(lead: dict | None) -> str:
     )
 
     return (
-        _kicker_html(lead.get("topic", "")) + headline_html + dek_html
+        _kicker_html(_kicker_for(lead)) + headline_html + dek_html
         + body_html + sources_html + _read_more(lead.get("url"))
     )
 
@@ -182,7 +195,7 @@ def _secondary_html(secondary: list[dict]) -> str:
         summary = clamp_summary(item.get("summary", ""), _SECONDARY_SUMMARY_WORDS)
         items.append(
             '<div class="secondary-item">'
-            + _kicker_html(item.get("topic", ""))
+            + _kicker_html(_kicker_for(item))
             + f'<h3 class="hd" style="font-size:22px;">{_linked(item.get("headline", ""), item.get("url"))}</h3>'
             + (f"<p>{_esc(summary)}</p>" if summary else "")
             + "</div>"
@@ -192,9 +205,11 @@ def _secondary_html(secondary: list[dict]) -> str:
 
 def _brief_html(brief: dict) -> str:
     summary = clamp_summary(brief.get("summary", ""), _BRIEF_SUMMARY_WORDS)
+    date_label = format_relative_date(brief.get("published"))
     return (
         '<div class="brief">'
-        f'<h4>{_linked(brief.get("headline", ""), brief.get("url"))}</h4>'
+        + _kicker_html(date_label)
+        + f'<h4>{_linked(brief.get("headline", ""), brief.get("url"))}</h4>'
         + (f"<p>{_esc(summary)}</p>" if summary else "")
         + "</div>"
     )

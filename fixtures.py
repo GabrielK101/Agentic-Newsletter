@@ -1,16 +1,27 @@
 """fixtures.py - a canned front-page digest for exercising rendering/
 delivery without calling the model or any tools."""
-from datetime import date
+from datetime import date, timedelta
 
 
 def fixture_stories(config: dict) -> dict:
     """A front-page digest shaped exactly like parse_digest's output:
     {lead, secondary, sections, ticker, scoreboard, sources, disclosure,
     notes}. Covers a long and a short example, one empty section (the
-    quiet-day case), no ticker, a scoreboard, and one deliberately hostile
-    item (<script> headline, javascript: url) for escaping/safe_url."""
+    quiet-day case), no ticker, a scoreboard, one deliberately hostile
+    item (<script> headline, javascript: url) for escaping/safe_url, a
+    headline-only item (empty summary - should be dropped by the summary
+    floor), a missing-date item (no "published" at all - shows no date,
+    never inferred), an over-long summary (should be clamped), and a mix
+    of today/yesterday/older dates to exercise every relative-date case."""
     topics = [t["name"] for t in config["topics"]] or ["General"]
-    today = date.today().isoformat()
+    today = date.today()
+    yesterday = (today - timedelta(days=1)).isoformat()
+    # 2 days old: within the default 3-day lookback window (so it survives
+    # prepare_front_page's freshness filter and actually renders), but old
+    # enough that format_relative_date must show the explicit weekday/day/
+    # month form, not "Today"/"Yesterday".
+    older = (today - timedelta(days=2)).isoformat()
+    today = today.isoformat()
 
     long_body = (
         "This is a longer fixture body meant to sit near the word limit used "
@@ -20,7 +31,16 @@ def fixture_stories(config: dict) -> dict:
         "front-page lead would, to make sure a multi-paragraph body renders "
         "sensibly end to end."
     )
-    short_summary = "Short summary, one sentence only."
+    short_summary = "Short summary, one sentence only, nothing more to add."  # 9 words - clears the 8-word floor
+    over_long_summary = (
+        "This brief's summary runs deliberately far past its own word ceiling "
+        "so clamp_summary's truncation is actually visible in the rendered "
+        "output rather than just asserted in a test - it keeps going with "
+        "more clauses about the same minor story, repeating that nothing "
+        "else of substance happened today beyond this one small development, "
+        "well past the point any brief-tier item should ever need to reach "
+        "in a real digest, to make the cut-off unmistakable."
+    )
 
     lead = {
         "topic": topics[0],
@@ -53,6 +73,14 @@ def fixture_stories(config: dict) -> dict:
             "published": today,
             "update_of": None,
         },
+        {
+            "topic": topics[0],
+            "headline": "Fixture secondary story with no published date",
+            "summary": "This item has no \"published\" key at all - the kicker should show no date.",
+            "url": "https://example.com/fixture-secondary-3",
+            "update_of": None,
+            # no "published" key - defensive parsing must show nothing, never infer today.
+        },
     ]
 
     sections = [
@@ -73,6 +101,20 @@ def fixture_stories(config: dict) -> dict:
                     "published": today,
                     "update_of": None,
                 },
+                {
+                    "headline": "Fixture headline-only brief with no summary",
+                    "summary": "",
+                    "url": "https://example.com/fixture-brief-headline-only",
+                    "published": today,
+                    "update_of": None,
+                },
+                {
+                    "headline": "Fixture brief from yesterday",
+                    "summary": "Dated yesterday, so the kicker should read \"Yesterday\".",
+                    "url": "https://example.com/fixture-brief-yesterday",
+                    "published": yesterday,
+                    "update_of": None,
+                },
             ],
         },
         {
@@ -89,6 +131,13 @@ def fixture_stories(config: dict) -> dict:
                     "published": today,
                     "update_of": None,
                 },
+                {
+                    "headline": "Fixture World brief with an over-long summary",
+                    "summary": over_long_summary,
+                    "url": "https://example.com/fixture-world-2",
+                    "published": today,
+                    "update_of": None,
+                },
             ],
         },
         {
@@ -99,6 +148,13 @@ def fixture_stories(config: dict) -> dict:
                     "summary": short_summary,
                     "url": "https://example.com/fixture-worth-knowing-1",
                     "published": today,
+                    "update_of": None,
+                },
+                {
+                    "headline": "Fixture Worth-knowing brief, a couple of days old",
+                    "summary": "Dated two days ago, so the kicker should show the explicit weekday/day/month, not \"Today\".",
+                    "url": "https://example.com/fixture-worth-knowing-2",
+                    "published": older,
                     "update_of": None,
                 },
             ],

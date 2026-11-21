@@ -6,12 +6,17 @@ packed into rows of 3 that never leave a lone card) -> a 2-column brief
 list for everything else -> a footer. Every band is a full-width table so
 columns inside it always end together, and a thin rule separates each
 major section. The model never chooses layout - it only supplies "lead"
-and "weight"; everything else here is deterministic.
+and "weight"; everything else here is deterministic. DOM order always
+matches importance order (lead, then weight 3, 2, 1), and multi-column
+rows fill left-to-right in that order - never column-wise - so mobile
+stacking (every multi-column row collapses to one column under
+_MEDIA_QUERY_CSS) preserves it too.
 """
 import html
 import re
-from datetime import date
+from datetime import date, datetime
 from urllib.parse import urlparse
+from zoneinfo import ZoneInfo
 
 _SERIF = "Georgia, 'Times New Roman', Times, serif"
 _SANS = "-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif"
@@ -29,15 +34,30 @@ _HERO_GAP = 8    # vertical space between the hero's headline/summary/read-more
 
 MAX_CARDS = 9    # hero included - at most 8 more cards in the grid
 CONTENT_WIDTH = 760  # overall canvas; wider than the traditional 600-640px
-                     # email-safe max specifically to give the hero two
-                     # flanking columns (hero_flanked) without shrinking the
-                     # hero itself - still within what modern clients (Gmail,
-                     # Apple Mail, Outlook.com, mobile) render without
-                     # clipping; older Outlook desktop is the main risk.
+                     # email-safe max - still within what modern clients
+                     # (Gmail, Apple Mail, Outlook.com, mobile) render
+                     # without clipping; older Outlook desktop is the main risk.
 
-# Summary word caps applied at render time (clamp_summary), matching what
-# the SYSTEM prompt asks the model for - a safety net, not a re-prompt.
-_SUMMARY_LIMITS = {"lead": 90, 3: 55, 2: 30, 1: 20}
+# Summary word limits: a floor (below which a summary says too little to
+# be worth keeping - dropped, never padded) and per-tier ceilings (render-
+# time safety net matching what the SYSTEM prompt asks the model for).
+# Enforced first at parse time (agent_loop.py's parse_digest, and
+# digest.py's prepare_front_page so --fixture digests get the same
+# treatment as real model output), then again here at render time.
+SUMMARY_WORD_FLOOR = 8
+SUMMARY_CEILING_HERO = 110
+SUMMARY_CEILING_MAJOR = 70
+SUMMARY_CEILING_STANDARD = 45  # weight 2 - the front-page pipeline doesn't
+                               # currently produce this tier (lead/
+                               # secondary/brief map to HERO/MAJOR/BRIEF
+                               # only); kept for the table's shape below.
+SUMMARY_CEILING_BRIEF = 25
+_SUMMARY_LIMITS = {
+    "lead": SUMMARY_CEILING_HERO, 3: SUMMARY_CEILING_MAJOR,
+    2: SUMMARY_CEILING_STANDARD, 1: SUMMARY_CEILING_BRIEF,
+}
+
+_LONDON_TZ = ZoneInfo("Europe/London")
 
 _MEDIA_QUERY_CSS = (
     "@media (max-width:480px){"
@@ -61,6 +81,47 @@ def safe_url(url: str) -> str:
     if isinstance(url, str) and (url.startswith("http://") or url.startswith("https://")):
         return url
     return "#"
+
+
+def _parse_published(value) -> date | None:
+    """`value` as an ISO date or datetime string -> a date, defensively -
+    None if missing or unparseable. Never infers a date from anything
+    else (today, a neighbouring story, ...) - no date in means no date
+    shown, not "assume today"."""
+    if not isinstance(value, str) or not value.strip():
+        return None
+    value = value.strip()
+    try:
+        return date.fromisoformat(value[:10])
+    except ValueError:
+        pass
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is not None:
+        parsed = parsed.astimezone(_LONDON_TZ)
+    return parsed.date()
+
+
+def format_relative_date(published, today: date | None = None) -> str:
+    """"Today" / "Yesterday" / "Thu 19 Nov" for `published` (an ISO date
+    or datetime string), relative to `today` (Europe/London's current
+    date if not given) - or "" if `published` is missing or unparseable.
+    Anything older than yesterday gets the explicit weekday+day+month
+    form, so a stale item is never silently indistinguishable from a
+    fresh one."""
+    parsed = _parse_published(published)
+    if parsed is None:
+        return ""
+    if today is None:
+        today = datetime.now(_LONDON_TZ).date()
+    delta = (today - parsed).days
+    if delta == 0:
+        return "Today"
+    if delta == 1:
+        return "Yesterday"
+    return f"{parsed.strftime('%a')} {parsed.day} {parsed.strftime('%b')}"
 
 
 def _read_more_link(url: str) -> str:
@@ -94,16 +155,20 @@ def _snippet_note(story: dict, size_px: int = 11) -> str:
 
 
 def _kicker_text(story: dict) -> str:
-    """Plain escaped kicker text: the topic, "UPDATE", or "UPDATE · TOPIC".
-    "" if there's nothing to show - never a dangling "·" with no topic
-    after it."""
+    """Plain escaped kicker text: any combination of "UPDATE", the topic,
+    and a relative date ("TODAY"/"YESTERDAY"/"THU 19 NOV"), joined by
+    " &middot; " - only the parts that actually exist. "" if there's
+    nothing to show."""
+    parts = []
+    if story.get("update_of") is not None:
+        parts.append("UPDATE")
     topic = html.escape(str(story.get("topic", "")).upper())
-    is_update = story.get("update_of") is not None
-    if is_update and topic:
-        return f"UPDATE &middot; {topic}"
-    if is_update:
-        return "UPDATE"
-    return topic
+    if topic:
+        parts.append(topic)
+    date_label = format_relative_date(story.get("published"))
+    if date_label:
+        parts.append(html.escape(date_label.upper()))
+    return " &middot; ".join(parts)
 
 
 def _kicker_html(story: dict, size_px: int) -> str:
@@ -141,6 +206,24 @@ def clamp_summary(text: str, max_words: int) -> str:
     if last_boundary:
         return truncated[:last_boundary.end()].strip()
     return truncated.rstrip() + "…"
+
+
+def clean_summary(headline: str, summary: str, ceiling: int) -> str | None:
+    """Clamp `summary` to `ceiling` words, then enforce SUMMARY_WORD_FLOOR:
+    a summary that short says too little to be worth keeping, so the
+    whole item is dropped (None, with a warning naming it by headline) -
+    never padded. Shared between agent_loop.py's parse_digest (real model
+    output) and digest.py's prepare_front_page, so --fixture digests get
+    exactly the same floor/ceiling treatment as a real run."""
+    summary = (summary or "").strip()
+    if not summary:
+        print(f"[dropped: no summary] {headline!r}")
+        return None
+    clamped = clamp_summary(summary, ceiling)
+    if len(clamped.split()) < SUMMARY_WORD_FLOOR:
+        print(f"[dropped: summary under {SUMMARY_WORD_FLOOR} words] {headline!r}")
+        return None
+    return clamped
 
 
 def _tier_of(story: dict) -> int:
@@ -226,36 +309,12 @@ def _hero_content_html(hero: dict) -> str:
 
 
 def hero_band(hero: dict) -> str:
-    """Full-width hero: _hero_content_html, wrapped as its own band."""
+    """Full-width hero: _hero_content_html, wrapped as its own band.
+    Always full-width, never flanked by other stories beside it - table
+    layout can't move a flanking column's DOM position without also
+    moving where it stacks on mobile, and a brief-tier flank stacking
+    above the lead would break DOM-order-is-importance-order."""
     return _band(_hero_content_html(hero))
-
-
-def _flank_entry(story: dict) -> str:
-    """Compact kicker + linked headline for a hero-flanking column - too
-    narrow for a summary."""
-    kicker_html = _kicker_html(story, 9)
-    headline = html.escape(str(story.get("headline", "")))
-    safe = safe_url(story.get("url", ""))
-    if safe != "#":
-        headline_html = (
-            f'<a href="{html.escape(safe, quote=True)}" style="color:{_INK};'
-            f'text-decoration:none;font-weight:700;">{headline}</a>'
-        )
-    else:
-        headline_html = f'<span style="font-weight:700;">{headline}</span>'
-    return kicker_html + f'<div style="font-family:{_SERIF};font-size:13px;line-height:1.3;">{headline_html}</div>'
-
-
-def hero_flanked(hero: dict, flank_left: dict, flank_right: dict) -> str:
-    """The hero with one compact story column flanking it on each side.
-    Only used when the wider canvas (see render_html) has two spare brief-
-    tier stories to flank with - the hero's own proportions are unchanged
-    from hero_band; the flanks use the extra width the wider canvas adds,
-    not space taken out of the hero."""
-    return _band_cols(
-        [_flank_entry(flank_left), _hero_content_html(hero), _flank_entry(flank_right)],
-        widths=[15, 70, 15],
-    )
 
 
 # --- grid ---
@@ -318,9 +377,10 @@ def _pack_rows(cards: list[dict]) -> tuple[list[list[dict]], list[dict]]:
 # --- brief list ---
 
 def _brief_entry(story: dict) -> str:
-    """"KICKER · linked headline ->", headline only - no summary."""
+    """"KICKER · linked headline ->" plus its summary underneath."""
     kicker_text = _kicker_text(story)
     headline = html.escape(str(story.get("headline", "")))
+    summary = html.escape(clamp_summary(str(story.get("summary", "")), SUMMARY_CEILING_BRIEF))
     safe = safe_url(story.get("url", ""))
     if safe != "#":
         headline_html = (
@@ -335,25 +395,31 @@ def _brief_entry(story: dict) -> str:
     )
     return (
         f'<div style="font-family:{_SERIF};font-size:14px;line-height:1.4;padding:{_CARD_GAP}px 0;">'
-        f'{kicker_html}{headline_html}</div>'
+        f'{kicker_html}{headline_html}'
+        + (f'<div style="font-size:13px;color:#3a3a3a;margin-top:2px;">{summary}</div>' if summary else "")
+        + '</div>'
     )
 
 
 def brief_list_band(stories: list[dict]) -> str:
-    """Weight-1 + grid overflow, in 2 columns. Items alternate between
-    columns so column heights differ by at most 1. "" if there's nothing
-    left to show - the band is skipped entirely rather than rendered empty.
-    A single leftover story gets one full-width column instead of a
-    2-column band with an empty second cell."""
+    """Weight-1 + grid overflow, in rows of 2. Each row holds consecutive
+    items (never alternating/column-wise assignment), so DOM order stays
+    importance order both on desktop (left-to-right, row by row) and on
+    mobile once each row's two cells stack (top to bottom in the same
+    order). "" if there's nothing left to show. A single leftover story
+    gets one full-width row instead of a 2-column row with an empty cell."""
     if not stories:
         return ""
     if len(stories) == 1:
         return _band(_brief_entry(stories[0]))
-    left = [s for i, s in enumerate(stories) if i % 2 == 0]
-    right = [s for i, s in enumerate(stories) if i % 2 == 1]
-    left_html = "".join(_brief_entry(s) for s in left)
-    right_html = "".join(_brief_entry(s) for s in right)
-    return _band_cols([left_html, right_html])
+    rows = []
+    for i in range(0, len(stories), 2):
+        pair = stories[i:i + 2]
+        if len(pair) == 2:
+            rows.append(_band_cols([_brief_entry(pair[0]), _brief_entry(pair[1])], outer_pad=0, margin_bottom=0))
+        else:
+            rows.append(_brief_entry(pair[0]))
+    return _band("".join(rows))
 
 
 def footer_band() -> str:
@@ -420,18 +486,9 @@ def render_html(stories: list[dict], title: str = "The Daily Digest", tagline: s
     rows, moved_to_brief = _pack_rows(grid_pool)
     briefs = briefs + overflow + moved_to_brief
 
-    # Flank the hero with two brief-tier stories when there are enough to
-    # spare - uses the wider canvas's extra width, not space taken from
-    # the hero itself. Falls back to the plain hero band otherwise.
-    if len(briefs) >= 2:
-        flank_left, flank_right, *briefs = briefs
-        hero_html = hero_flanked(hero, flank_left, flank_right)
-    else:
-        hero_html = hero_band(hero)
-
     body = _join_sections([
         _masthead_html(len(stories), title, tagline),
-        hero_html,
+        hero_band(hero),
         "".join(_grid_row_html(row) for row in rows),
         brief_list_band(briefs),
         footer_band(),

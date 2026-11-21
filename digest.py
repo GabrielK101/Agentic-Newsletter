@@ -15,6 +15,7 @@ from fixtures import fixture_stories
 from config import load_config
 from db import init_db, recent_stories, save_story, seen_url
 from delivery import deliver
+from newsletter_render import SUMMARY_CEILING_BRIEF, SUMMARY_CEILING_HERO, SUMMARY_CEILING_MAJOR, clean_summary
 from storage import sync_down, sync_up
 
 load_dotenv()
@@ -38,8 +39,11 @@ PRICE_OUT_PER_M = 15.0
 def _lead_summary(lead: dict) -> str:
     """The lead's dek + body joined into one block - used both as the
     HTML/text renderer's "summary" for the hero card and as what gets
-    stored for future "Already told" context."""
-    return " ".join(part for part in (lead.get("dek", ""), lead.get("body", "")) if part).strip()
+    stored for future "Already told" context. Falls back to "summary"
+    for a promoted secondary/brief (see prepare_front_page), which has
+    that field instead of dek/body."""
+    joined = " ".join(part for part in (lead.get("dek", ""), lead.get("body", "")) if part).strip()
+    return joined or str(lead.get("summary", "")).strip()
 
 
 def _is_fresh_and_new(item: dict, cutoff: str) -> bool:
@@ -51,27 +55,57 @@ def _is_fresh_and_new(item: dict, cutoff: str) -> bool:
     return bool(item.get("url")) and not seen_url(item["url"])
 
 
+def _passes_summary_floor(item: dict, field: str, ceiling: int) -> bool:
+    """Clamp item[field] to `ceiling` words and enforce the floor
+    (clean_summary), mutating item[field] in place with the clamped
+    text. False (drop the item) if it's empty or under the floor -
+    applied here too (not just agent_loop.py's parse_digest) so a
+    --fixture digest gets exactly the same treatment as real model
+    output, including the dropped-item warning."""
+    cleaned = clean_summary(item.get("headline", ""), item.get(field, ""), ceiling)
+    if cleaned is None:
+        return False
+    item[field] = cleaned
+    return True
+
+
+def _normalize_promoted_lead(item: dict) -> dict:
+    """A promoted secondary/brief item (see prepare_front_page) has
+    "summary", not "dek"/"body" - give it the shape every lead consumer
+    expects (_lead_summary, render_digest, webpage.py's lead block) so it
+    renders exactly like a real lead, just without a dek."""
+    if "body" in item or "dek" in item:
+        return item
+    return {**item, "dek": "", "body": item.get("summary", "")}
+
+
 def prepare_front_page(digest: dict, cutoff: str) -> tuple[dict | None, list[dict], list[dict]]:
-    """Apply the lookback-days cutoff and the already-seen-url check to
-    every item BEFORE it can appear in the digest. The lead must survive
-    both checks; if it doesn't, the first surviving secondary item - or,
-    failing that, the first surviving brief - is promoted to lead instead.
-    The lead is never allowed to be a stale or already-told story."""
+    """Apply the lookback-days cutoff, the already-seen-url check, and the
+    summary floor/ceiling to every item BEFORE it can appear in the
+    digest. The lead must survive all three; if it doesn't, the first
+    surviving secondary item - or, failing that, the first surviving
+    brief - is promoted to lead instead. The lead is never allowed to be
+    a stale, already-told, or under-floor-summary story."""
     lead = digest.get("lead")
     secondary = [s for s in digest.get("secondary", []) if _is_fresh_and_new(s, cutoff)]
+    secondary = [s for s in secondary if _passes_summary_floor(s, "summary", SUMMARY_CEILING_MAJOR)]
+
     sections = []
     for section in digest.get("sections", []):
         briefs = [b for b in section.get("briefs", []) if _is_fresh_and_new(b, cutoff)]
+        briefs = [b for b in briefs if _passes_summary_floor(b, "summary", SUMMARY_CEILING_BRIEF)]
         sections.append({"name": section["name"], "briefs": briefs})
 
-    if lead is not None and not _is_fresh_and_new(lead, cutoff):
+    if lead is not None and (
+        not _is_fresh_and_new(lead, cutoff) or not _passes_summary_floor(lead, "body", SUMMARY_CEILING_HERO)
+    ):
         lead = None
         if secondary:
-            lead, secondary = secondary[0], secondary[1:]
+            lead, secondary = _normalize_promoted_lead(secondary[0]), secondary[1:]
         else:
             for section in sections:
                 if section["briefs"]:
-                    lead, section["briefs"] = section["briefs"][0], section["briefs"][1:]
+                    lead, section["briefs"] = _normalize_promoted_lead(section["briefs"][0]), section["briefs"][1:]
                     break
 
     return lead, secondary, sections
@@ -89,6 +123,7 @@ def build_render_stories(lead: dict | None, secondary: list[dict], sections: lis
             "headline": lead["headline"],
             "summary": _lead_summary(lead),
             "url": lead["url"],
+            "published": lead.get("published"),
             "update_of": lead.get("update_of"),
             "lead": True,
             "weight": 3,
@@ -99,6 +134,7 @@ def build_render_stories(lead: dict | None, secondary: list[dict], sections: lis
             "headline": item["headline"],
             "summary": item.get("summary", ""),
             "url": item["url"],
+            "published": item.get("published"),
             "update_of": item.get("update_of"),
             "lead": False,
             "weight": 3,
@@ -110,6 +146,7 @@ def build_render_stories(lead: dict | None, secondary: list[dict], sections: lis
                 "headline": brief["headline"],
                 "summary": brief.get("summary", ""),
                 "url": brief["url"],
+                "published": brief.get("published"),
                 "update_of": brief.get("update_of"),
                 "lead": False,
                 "weight": 1,

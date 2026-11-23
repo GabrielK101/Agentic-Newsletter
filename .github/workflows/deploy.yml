@@ -1,0 +1,96 @@
+name: Test and deploy
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - "design/**"
+      - "**.md"
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  PROJECT_ID: literal-news-agent
+  REGION: us-central1
+  REPO: digest
+  JOB: daily-digest
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      # Dummy values: the fixture run never calls any API.
+      ANTHROPIC_API_KEY: dummy
+      TAVILY_API_KEY: dummy
+      DIGEST_STORAGE: local
+      DIGEST_DB: /tmp/ci-test.db
+      DIGEST_CONFIG: config.prod.yaml
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Unit tests (if any)
+        run: |
+          if [ -d tests ]; then
+            pip install pytest
+            pytest -q
+          else
+            echo "No tests/ directory yet, skipping."
+          fi
+
+      - name: Fixture run (no APIs, no email)
+        run: python digest.py --fixture
+
+  deploy:
+    needs: test
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write   # lets the job request the GitHub token Google verifies
+    env:
+      IMAGE: us-central1-docker.pkg.dev/literal-news-agent/digest/digest
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WIF_PROVIDER }}
+          service_account: ${{ secrets.GCP_DEPLOYER_SA }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - name: Let Docker push to Artifact Registry
+        run: gcloud auth configure-docker ${{ env.REGION }}-docker.pkg.dev --quiet
+
+      - name: Build and push image (tagged with the commit)
+        run: |
+          docker build -t "$IMAGE:${{ github.sha }}" .
+          docker push "$IMAGE:${{ github.sha }}"
+
+      - name: Point the job at the new image
+        run: |
+          gcloud run jobs update "$JOB" \
+            --region="$REGION" \
+            --image="$IMAGE:${{ github.sha }}"
+
+      - name: Smoke test in the cloud (config, secrets, bucket; no API spend)
+        run: |
+          gcloud run jobs execute "$JOB" \
+            --region="$REGION" \
+            --args=--check \
+            --wait

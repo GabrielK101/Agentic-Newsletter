@@ -11,8 +11,10 @@ def fixture_stories(config: dict) -> dict:
     item (<script> headline, javascript: url) for escaping/safe_url, a
     headline-only item (empty summary - should be dropped by the summary
     floor), a missing-date item (no "published" at all - shows no date,
-    never inferred), an over-long summary (should be clamped), and a mix
-    of today/yesterday/older dates to exercise every relative-date case."""
+    never inferred), an over-long summary (should be clamped), a mix of
+    today/yesterday/older dates to exercise every relative-date case, a
+    snippet-basis lead (should be dropped and a secondary promoted in its
+    place), and a story citing a denylisted domain (should be dropped)."""
     topics = [t["name"] for t in config["topics"]] or ["General"]
     today = date.today()
     yesterday = (today - timedelta(days=1)).isoformat()
@@ -49,6 +51,7 @@ def fixture_stories(config: dict) -> dict:
         "body": long_body,
         "url": "https://example.com/fixture-lead",
         "sources": ["Example Wire", "Example Daily"],
+        "basis": "snippet",  # deliberately not "article" - should be dropped, promoting a secondary instead
         "published": today,
         "update_of": None,
     }
@@ -62,6 +65,7 @@ def fixture_stories(config: dict) -> dict:
                 "to wrap across a couple of lines in a major-tier card."
             ),
             "url": "https://example.com/fixture-secondary-1",
+            "basis": "article",
             "published": today,
             "update_of": None,
         },
@@ -70,6 +74,7 @@ def fixture_stories(config: dict) -> dict:
             "headline": "Fixture secondary story, short",
             "summary": short_summary,
             "url": "https://example.com/fixture-secondary-2",
+            "basis": "article",
             "published": today,
             "update_of": None,
         },
@@ -78,8 +83,18 @@ def fixture_stories(config: dict) -> dict:
             "headline": "Fixture secondary story with no published date",
             "summary": "This item has no \"published\" key at all - the kicker should show no date.",
             "url": "https://example.com/fixture-secondary-3",
+            "basis": "article",
             "update_of": None,
             # no "published" key - defensive parsing must show nothing, never infer today.
+        },
+        {
+            "topic": topics[0],
+            "headline": "Fixture secondary story citing a denylisted domain",
+            "summary": "Sourced only from a social platform, not a primary outlet, so it should be dropped outright.",
+            "url": "https://www.facebook.com/example/posts/12345",
+            "basis": "article",
+            "published": today,
+            "update_of": None,
         },
     ]
 

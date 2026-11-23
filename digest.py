@@ -3,9 +3,11 @@
 Parses CLI flags, wires together the agent loop (agent_loop.py), fixtures
 (fixtures.py), the database and delivery, then renders and ships the digest.
 """
+import json
 import os
 import sys
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
+from urllib.parse import urlparse
 
 from dotenv import load_dotenv
 
@@ -16,7 +18,7 @@ from config import load_config
 from db import init_db, recent_stories, save_story, seen_url
 from delivery import deliver
 from newsletter_render import SUMMARY_CEILING_BRIEF, SUMMARY_CEILING_HERO, SUMMARY_CEILING_MAJOR, clean_summary
-from storage import sync_down, sync_up
+from storage import sync_down, sync_up, upload_run_archive
 
 load_dotenv()
 
@@ -55,6 +57,59 @@ def _is_fresh_and_new(item: dict, cutoff: str) -> bool:
     return bool(item.get("url")) and not seen_url(item["url"])
 
 
+# Low-trust domains: social platforms, not primary reporting - a story
+# citing one of these as its only source is dropped outright, never
+# rendered. Matches the domain itself and any subdomain (e.g. m.facebook.com).
+DENYLIST_DOMAINS = frozenset({
+    "facebook.com", "x.com", "twitter.com", "instagram.com",
+    "tiktok.com", "reddit.com", "youtube.com",
+})
+
+
+def _is_denylisted(url: str) -> bool:
+    host = urlparse(url or "").netloc.lower()
+    if host.startswith("www."):
+        host = host[4:]
+    return host in DENYLIST_DOMAINS or any(host.endswith("." + d) for d in DENYLIST_DOMAINS)
+
+
+def _passes_domain_check(item: dict) -> bool:
+    """False (drop the item) if its url is on DENYLIST_DOMAINS - applies
+    to every story (lead, secondary, brief)."""
+    url = item.get("url", "")
+    if _is_denylisted(url):
+        print(f"[dropped: low-trust domain] {item.get('headline', '')!r} ({url})")
+        return False
+    return True
+
+
+def _passes_basis_check(item: dict) -> bool:
+    """False (drop the item) if "basis" is "snippet" - the lead and every
+    secondary (weight-3) story must be based on the fetched article, never
+    just a headline or search snippet. Never downgrades; drops outright.
+    Briefs don't carry a "basis" field, so this is a no-op for them."""
+    if item.get("basis") == "snippet":
+        print(f"[dropped: snippet basis not allowed for lead/secondary] {item.get('headline', '')!r}")
+        return False
+    return True
+
+
+def _try_parse_json_reply(text: str):
+    """The model's raw JSON reply, parsed - or the raw text itself if it
+    doesn't parse, so a malformed reply is still captured in the run
+    archive for debugging why, not just silently dropped."""
+    stripped = text.strip()
+    if stripped.startswith("```"):
+        stripped = stripped.strip("`").removeprefix("json").strip()
+    start, end = stripped.find("{"), stripped.rfind("}")
+    if start != -1 and end != -1 and end > start:
+        try:
+            return json.loads(stripped[start:end + 1])
+        except json.JSONDecodeError:
+            pass
+    return text
+
+
 def _passes_summary_floor(item: dict, field: str, ceiling: int) -> bool:
     """Clamp item[field] to `ceiling` words and enforce the floor
     (clean_summary), mutating item[field] in place with the clamped
@@ -80,24 +135,32 @@ def _normalize_promoted_lead(item: dict) -> dict:
 
 
 def prepare_front_page(digest: dict, cutoff: str) -> tuple[dict | None, list[dict], list[dict]]:
-    """Apply the lookback-days cutoff, the already-seen-url check, and the
-    summary floor/ceiling to every item BEFORE it can appear in the
-    digest. The lead must survive all three; if it doesn't, the first
-    surviving secondary item - or, failing that, the first surviving
-    brief - is promoted to lead instead. The lead is never allowed to be
-    a stale, already-told, or under-floor-summary story."""
+    """Apply the lookback-days cutoff, the already-seen-url check, the
+    low-trust-domain denylist, the article-basis requirement (lead and
+    secondary only), and the summary floor/ceiling to every item BEFORE
+    it can appear in the digest. The lead must survive all of these; if
+    it doesn't, the first surviving secondary item - or, failing that,
+    the first surviving brief - is promoted to lead instead. The lead is
+    never allowed to be a stale, already-told, low-trust, snippet-basis,
+    or under-floor-summary story."""
     lead = digest.get("lead")
     secondary = [s for s in digest.get("secondary", []) if _is_fresh_and_new(s, cutoff)]
+    secondary = [s for s in secondary if _passes_domain_check(s)]
+    secondary = [s for s in secondary if _passes_basis_check(s)]
     secondary = [s for s in secondary if _passes_summary_floor(s, "summary", SUMMARY_CEILING_MAJOR)]
 
     sections = []
     for section in digest.get("sections", []):
         briefs = [b for b in section.get("briefs", []) if _is_fresh_and_new(b, cutoff)]
+        briefs = [b for b in briefs if _passes_domain_check(b)]
         briefs = [b for b in briefs if _passes_summary_floor(b, "summary", SUMMARY_CEILING_BRIEF)]
         sections.append({"name": section["name"], "briefs": briefs})
 
     if lead is not None and (
-        not _is_fresh_and_new(lead, cutoff) or not _passes_summary_floor(lead, "body", SUMMARY_CEILING_HERO)
+        not _is_fresh_and_new(lead, cutoff)
+        or not _passes_domain_check(lead)
+        or not _passes_basis_check(lead)
+        or not _passes_summary_floor(lead, "body", SUMMARY_CEILING_HERO)
     ):
         lead = None
         if secondary:
@@ -322,10 +385,22 @@ if __name__ == "__main__":
         digest = fixture_stories(config)
         usage = {"input_tokens": 0, "output_tokens": 0}
     else:
-        raw_text, hit_max_turns, usage = run_agent(config, history)
+        raw_text, hit_max_turns, usage, tool_log = run_agent(config, history)
         if hit_max_turns:
             print(raw_text)
             sys.exit(1)
+
+        # Archived before parsing, so a run that fails to parse is still
+        # captured for debugging why. No-op unless gcs + DIGEST_ARCHIVE=true.
+        run_timestamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
+        upload_run_archive(run_timestamp, {
+            "timestamp": run_timestamp,
+            "tool_results": [
+                {"tool": t["tool"], "args": t["args"], "result": str(t["result"])[:2000]}
+                for t in tool_log
+            ],
+            "final_json": _try_parse_json_reply(raw_text),
+        })
 
         digest = parse_digest(raw_text)
         if digest is None:

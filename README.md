@@ -22,7 +22,7 @@ Fill in `ANTHROPIC_API_KEY` and `TAVILY_API_KEY` in `.env`, and edit `config.yam
 - `DIGEST_STORAGE` - `local` (default, no-op), `gcs`, or `s3` (the latter is an unimplemented stub). `gcs` also needs:
   - `DIGEST_GCS_BUCKET` - required when `DIGEST_STORAGE=gcs`.
   - `DIGEST_DB_OBJECT` - object name within the bucket. Defaults to `digest.db`.
-  - `DIGEST_ARCHIVE` - `true` to also upload each run's saved `.md`/`.json`/`.html` (and the web edition, if one was rendered) to `gs://<bucket>/digests/` and `gs://<bucket>/web/`. Defaults off. Uploading does not make the bucket public - that's a separate infra decision.
+  - `DIGEST_ARCHIVE` - `true` to also upload each run's saved `.md`/`.json`/`.html` (and the web edition, if one was rendered) to `gs://<bucket>/digests/` and `gs://<bucket>/web/`. For a real model run (not `--fixture`), also uploads a raw debugging archive - tool results and the model's final JSON reply - to `gs://<bucket>/runs/<timestamp>.json`. Defaults off. Uploading does not make the bucket public - that's a separate infra decision.
   - Auth is Application Default Credentials only - no key files. On GCP compute this is automatic; locally, `gcloud auth application-default login`.
 - `DIGEST_DELIVERY` - `local` (default: print + files under `digests/`) or `email` (requires `GMAIL_USER`, `GMAIL_APP_PASSWORD`, and a recipient - see `DIGEST_TO` below).
 - `DIGEST_TO` - who the email goes to. Overridable per-config with `recipient` in `config.yaml` (`DIGEST_TO` is the fallback if that's unset).

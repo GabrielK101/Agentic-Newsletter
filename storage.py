@@ -9,6 +9,7 @@ concurrency precondition on upload - so two overlapping runs can't
 silently clobber each other's save. Auth is Application Default
 Credentials only; no key files.
 """
+import json
 import os
 import sys
 from pathlib import Path
@@ -142,6 +143,25 @@ def upload_web(filename: str, html: str) -> None:
     blob = gcs_storage.Client().bucket(bucket_name).blob(f"web/{filename}")
     blob.upload_from_string(html, content_type="text/html")
     print(f"[storage] uploaded web edition to gs://{bucket_name}/web/{filename}")
+
+
+def upload_run_archive(timestamp: str, payload: dict) -> None:
+    """DIGEST_STORAGE=gcs and DIGEST_ARCHIVE=true only: upload a raw
+    run-debugging archive (tool results + the model's final JSON reply -
+    see digest.py) to gs://<bucket>/runs/<timestamp>.json. A no-op
+    otherwise. `payload` only ever contains tool args/results and the
+    model's own reply - this codebase never passes a secret as a tool
+    argument or returns one as a tool result, so there's nothing to
+    redact here."""
+    if _backend() != "gcs" or os.environ.get("DIGEST_ARCHIVE", "").lower() != "true":
+        return
+
+    from google.cloud import storage as gcs_storage
+
+    bucket_name, _ = _gcs_bucket_and_object()
+    blob = gcs_storage.Client().bucket(bucket_name).blob(f"runs/{timestamp}.json")
+    blob.upload_from_string(json.dumps(payload, indent=2, ensure_ascii=False), content_type="application/json")
+    print(f"[storage] uploaded run archive to gs://{bucket_name}/runs/{timestamp}.json")
 
 
 def _archive_digest_files(bucket) -> None:

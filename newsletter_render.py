@@ -57,7 +57,7 @@ _SUMMARY_LIMITS = {
     2: SUMMARY_CEILING_STANDARD, 1: SUMMARY_CEILING_BRIEF,
 }
 
-_LONDON_TZ = ZoneInfo("Europe/London")
+LONDON_TZ = ZoneInfo("Europe/London")
 
 _MEDIA_QUERY_CSS = (
     "@media (max-width:480px){"
@@ -100,7 +100,7 @@ def _parse_published(value) -> date | None:
     except ValueError:
         return None
     if parsed.tzinfo is not None:
-        parsed = parsed.astimezone(_LONDON_TZ)
+        parsed = parsed.astimezone(LONDON_TZ)
     return parsed.date()
 
 
@@ -115,7 +115,7 @@ def format_relative_date(published, today: date | None = None) -> str:
     if parsed is None:
         return ""
     if today is None:
-        today = datetime.now(_LONDON_TZ).date()
+        today = datetime.now(LONDON_TZ).date()
     delta = (today - parsed).days
     if delta == 0:
         return "Today"

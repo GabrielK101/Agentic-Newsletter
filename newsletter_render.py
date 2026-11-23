@@ -377,26 +377,25 @@ def _pack_rows(cards: list[dict]) -> tuple[list[list[dict]], list[dict]]:
 # --- brief list ---
 
 def _brief_entry(story: dict) -> str:
-    """"KICKER · linked headline ->" plus its summary underneath."""
-    kicker_text = _kicker_text(story)
+    """Kicker (its own small-caps line), headline, summary, and a "Read
+    more" link underneath - the same structure and sizing pattern as a
+    grid card (_grid_card), just smaller, so every tier reads as one
+    consistent style instead of briefs looking like a cut-down, oddly
+    inline version of the others."""
     headline = html.escape(str(story.get("headline", "")))
     summary = html.escape(clamp_summary(str(story.get("summary", "")), SUMMARY_CEILING_BRIEF))
-    safe = safe_url(story.get("url", ""))
-    if safe != "#":
-        headline_html = (
-            f'<a href="{html.escape(safe, quote=True)}" style="color:{_INK};'
-            f'text-decoration:none;font-weight:700;">{headline} &#8594;</a>'
-        )
-    else:
-        headline_html = f'<span style="font-weight:700;">{headline} &#8594;</span>'
-    kicker_html = (
-        f'<span style="color:{_ACCENT};font-weight:700;">{kicker_text}</span> &middot; '
-        if kicker_text else ""
-    )
+    read_more = _read_more_link(story.get("url", ""))
     return (
-        f'<div style="font-family:{_SERIF};font-size:14px;line-height:1.4;padding:{_CARD_GAP}px 0;">'
-        f'{kicker_html}{headline_html}'
-        + (f'<div style="font-size:13px;color:#3a3a3a;margin-top:2px;">{summary}</div>' if summary else "")
+        f'<div style="padding:{_CARD_GAP}px 0;">'
+        + _kicker_html(story, 10)
+        + f'<div style="font-family:{_SERIF};font-size:15px;line-height:1.3;'
+        f'font-weight:700;color:{_INK};">{headline}</div>'
+        + (
+            f'<div style="font-family:{_SERIF};font-size:13px;line-height:1.4;color:#3a3a3a;'
+            f'margin-top:{_CARD_GAP}px;">{summary}</div>'
+            if summary else ""
+        )
+        + (f'<div style="margin-top:{_CARD_GAP}px;">{read_more}</div>' if read_more else "")
         + '</div>'
     )
 

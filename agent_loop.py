@@ -195,25 +195,78 @@ def build_request(config: dict, history: list[dict]) -> str:
     )
 
 
-def run_agent(config: dict, history: list[dict]) -> tuple[str, bool, dict, list[dict]]:
-    """Run the tool-use loop. Returns (final_text, hit_max_turns, usage,
-    tool_log) - tool_log is every tool call and its raw result, in order,
-    for the run archive (see digest.py)."""
+_NUDGE_TURN_OFFSET = 2  # at MAX_TURNS - this, tell the model to wrap up
+_NUDGE_MESSAGE = (
+    "Stop researching now. Write the final JSON from what you have."
+)
+_REPAIR_MESSAGE_TEMPLATE = (
+    "Your last output was not valid JSON ({error}). Output only the "
+    "corrected JSON object."
+)
+
+
+def _add_cache_breakpoint(messages: list[dict]) -> None:
+    """Mark the end of the current conversation prefix as cacheable, so the
+    next turn's request re-reads everything up to here from cache instead
+    of paying full input price for it. Only the LAST breakpoint matters for
+    a growing prefix, so clear any earlier one first - cache_control blocks
+    don't invalidate anything, but leaving stale ones around wastes the
+    4-breakpoint-per-request budget for no benefit."""
+    last = messages[-1]
+    if last["role"] == "assistant":
+        # SDK response content blocks (TextBlock/ToolUseBlock, etc.) - find
+        # the last one and mark it via a plain dict copy, since the blocks
+        # are immutable pydantic models.
+        content = last["content"]
+        blocks = [b.model_dump() if hasattr(b, "model_dump") else b for b in content]
+        for b in blocks:
+            b.pop("cache_control", None)
+        blocks[-1]["cache_control"] = {"type": "ephemeral"}
+        last["content"] = blocks
+    else:
+        # Our own plain-dict user turns (initial request, or tool_result list).
+        content = last["content"]
+        if isinstance(content, str):
+            last["content"] = [{"type": "text", "text": content, "cache_control": {"type": "ephemeral"}}]
+        else:
+            for b in content:
+                b.pop("cache_control", None)
+            content[-1]["cache_control"] = {"type": "ephemeral"}
+
+
+def run_agent(config: dict, history: list[dict]) -> tuple[str, dict, list[dict]]:
+    """Run the tool-use loop. Always ends with a final-answer call - on the
+    last couple of turns the model is told to wrap up, and on the very last
+    turn tool use is switched off so it cannot ask for more tools and must
+    answer. Returns (final_text, usage, tool_log); tool_log is every tool
+    call and its raw result, in order, for the run archive (see digest.py)."""
     client = anthropic.Anthropic()
     messages = [{"role": "user", "content": build_request(config, history)}]
-    usage = {"input_tokens": 0, "output_tokens": 0}
+    usage = {
+        "input_tokens": 0, "output_tokens": 0,
+        "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0,
+    }
     tool_log = []
 
     for turn in range(1, MAX_TURNS + 1):
+        if turn == MAX_TURNS - _NUDGE_TURN_OFFSET:
+            messages.append({"role": "user", "content": _NUDGE_MESSAGE})
+
+        final_turn = turn == MAX_TURNS
+        _add_cache_breakpoint(messages)
+
         resp = client.messages.create(
             model=MODEL,
             max_tokens=MAX_TOKENS,
             system=SYSTEM,
             tools=schemas(),
+            tool_choice={"type": "none"} if final_turn else {"type": "auto"},
             messages=messages,
         )
         usage["input_tokens"] += resp.usage.input_tokens
         usage["output_tokens"] += resp.usage.output_tokens
+        usage["cache_creation_input_tokens"] += resp.usage.cache_creation_input_tokens or 0
+        usage["cache_read_input_tokens"] += resp.usage.cache_read_input_tokens or 0
 
         # Replay the model's own turn into the transcript (the API is stateless).
         messages.append({"role": "assistant", "content": resp.content})
@@ -242,10 +295,58 @@ def run_agent(config: dict, history: list[dict]) -> tuple[str, bool, dict, list[
                 })
         # Tool results go back as a *user* turn.
         messages.append({"role": "user", "content": results})
-    else:
-        return f"Stopped after {MAX_TURNS} turns without a final answer.", True, usage, tool_log
 
-    return "".join(b.text for b in resp.content if b.type == "text"), False, usage, tool_log
+    return "".join(b.text for b in resp.content if b.type == "text"), usage, tool_log
+
+
+def run_agent_with_repair(config: dict, history: list[dict]) -> tuple[str, dict, list[dict], dict | None]:
+    """run_agent, plus one repair attempt if the final text doesn't parse
+    against the front-page schema, and a clear diagnostic on total failure.
+    Returns (final_text, usage, tool_log, digest) - `digest` is the parsed
+    front page, or None if even the repair attempt failed."""
+    final_text, usage, tool_log = run_agent(config, history)
+    digest = parse_digest(final_text)
+    if digest is not None:
+        return final_text, usage, tool_log, digest
+
+    print("[warning] final reply did not parse as a valid front page; attempting one repair call")
+    client = anthropic.Anthropic()
+    messages = [
+        {"role": "user", "content": build_request(config, history)},
+        {"role": "assistant", "content": final_text},
+        {"role": "user", "content": _REPAIR_MESSAGE_TEMPLATE.format(error=_last_parse_error(final_text))},
+    ]
+    resp = client.messages.create(
+        model=MODEL,
+        max_tokens=MAX_TOKENS,
+        system=SYSTEM,
+        tools=schemas(),
+        tool_choice={"type": "none"},
+        messages=messages,
+    )
+    usage["input_tokens"] += resp.usage.input_tokens
+    usage["output_tokens"] += resp.usage.output_tokens
+    usage["cache_creation_input_tokens"] += resp.usage.cache_creation_input_tokens or 0
+    usage["cache_read_input_tokens"] += resp.usage.cache_read_input_tokens or 0
+
+    repaired_text = "".join(b.text for b in resp.content if b.type == "text")
+    digest = parse_digest(repaired_text)
+    return repaired_text, usage, tool_log, digest
+
+
+def _last_parse_error(raw_text: str) -> str:
+    """Best-effort human-readable reason parse_digest rejected raw_text, for
+    the repair prompt. Not load-bearing - just needs to be informative."""
+    text = raw_text.strip()
+    if text.startswith("```"):
+        text = text.strip("`").removeprefix("json").strip()
+    if "{" not in text:
+        return "no JSON object found in the reply"
+    try:
+        json.JSONDecoder().raw_decode(text, text.index("{"))
+    except json.JSONDecodeError as e:
+        return str(e)
+    return "no candidate object matched the required front-page schema (needs at least a valid \"lead\")"
 
 
 _MAX_WORDS_DEK = 30  # the one-line subhead - not one of the 4 summary tiers
@@ -396,25 +497,11 @@ def _clean_source_item(raw) -> dict | None:
     return {"name": name, "url": None if url == "#" else url}
 
 
-def parse_digest(raw_text: str) -> dict | None:
-    """Parse and defensively validate the model's final reply against the
-    front-page schema: {lead, secondary, sections, ticker, scoreboard,
-    sources, disclosure, notes}. Only "lead" is required; every other
-    field is optional and malformed items are dropped individually rather
-    than failing the whole parse. Returns None if the reply isn't valid
-    JSON, isn't an object, or has no usable lead - text-level escaping
-    happens later, at render time, not here."""
-    text = raw_text.strip()
-    if text.startswith("```"):
-        text = text.strip("`").removeprefix("json").strip()
-
-    start, end = text.find("{"), text.rfind("}")
-    if start == -1 or end == -1 or end < start:
-        return None
-    try:
-        raw = json.loads(text[start:end + 1])
-    except json.JSONDecodeError:
-        return None
+def _validate_front_page(raw) -> dict | None:
+    """Clean and validate a single decoded JSON object against the
+    front-page schema. Returns None if `raw` isn't an object or has no
+    usable lead; every other field is optional and malformed items are
+    dropped individually rather than failing the whole validation."""
     if not isinstance(raw, dict):
         return None
 
@@ -473,3 +560,35 @@ def parse_digest(raw_text: str) -> dict | None:
         "disclosure": disclosure,
         "notes": notes,
     }
+
+
+def parse_digest(raw_text: str) -> dict | None:
+    """Find every JSON object in the model's final reply and keep the LAST
+    one that validates against the front-page schema. The model sometimes
+    writes a draft object, prose, or a retracted attempt before the real
+    one - scanning every "{" and validating each candidate (instead of a
+    single strict parse of the first "{" to the last "}") means a bad
+    draft earlier in the text can't break extraction of the good object
+    that follows it. Returns None if nothing in the text validates."""
+    text = raw_text.strip()
+    if text.startswith("```"):
+        text = text.strip("`").removeprefix("json").strip()
+
+    decoder = json.JSONDecoder()
+    best = None
+    pos = 0
+    while True:
+        brace = text.find("{", pos)
+        if brace == -1:
+            break
+        try:
+            raw, end = decoder.raw_decode(text, brace)
+        except json.JSONDecodeError:
+            pos = brace + 1
+            continue
+        validated = _validate_front_page(raw)
+        if validated is not None:
+            best = validated
+        pos = end
+
+    return best

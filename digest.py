@@ -12,7 +12,7 @@ from urllib.parse import urlparse
 from dotenv import load_dotenv
 
 import tools  # noqa: F401  -- importing this file runs the @tool decorators that fill REGISTRY
-from agent_loop import MODEL, MAX_TURNS, MAX_TOKENS, SYSTEM, build_request, run_agent, parse_digest
+from agent_loop import MODEL, MAX_TURNS, MAX_TOKENS, SYSTEM, build_request, run_agent_with_repair
 from fixtures import fixture_stories
 from config import load_config
 from db import init_db, recent_stories, save_story, seen_url
@@ -36,6 +36,26 @@ if SEND:
 # For the end-of-run cost estimate. Update if pricing changes.
 PRICE_IN_PER_M = 3.0
 PRICE_OUT_PER_M = 15.0
+# claude-sonnet-4-6 uses the standard prompt-caching multipliers (no
+# per-model exception - confirmed against the current docs, not assumed):
+# https://platform.claude.com/docs/en/docs/build-with-claude/prompt-caching
+_CACHE_WRITE_MULTIPLIER = 1.25  # 5-minute TTL, the only TTL this codebase uses
+_CACHE_READ_MULTIPLIER = 0.1
+
+
+def _print_usage_line(usage: dict) -> None:
+    cost = (
+        usage["input_tokens"] / 1_000_000 * PRICE_IN_PER_M
+        + usage["output_tokens"] / 1_000_000 * PRICE_OUT_PER_M
+        + usage.get("cache_creation_input_tokens", 0) / 1_000_000 * PRICE_IN_PER_M * _CACHE_WRITE_MULTIPLIER
+        + usage.get("cache_read_input_tokens", 0) / 1_000_000 * PRICE_IN_PER_M * _CACHE_READ_MULTIPLIER
+    )
+    print(
+        f"\n[usage] input_tokens={usage['input_tokens']} output_tokens={usage['output_tokens']} "
+        f"cache_creation_input_tokens={usage.get('cache_creation_input_tokens', 0)} "
+        f"cache_read_input_tokens={usage.get('cache_read_input_tokens', 0)} "
+        f"estimated_cost=${cost:.4f} (estimate)"
+    )
 
 
 def _lead_summary(lead: dict) -> str:
@@ -380,84 +400,88 @@ if __name__ == "__main__":
     init_db()
     history = recent_stories(config["history_days"])
 
-    if FIXTURE:
-        print("[fixture] skipping the model and all tools; using a canned front-page digest.")
-        digest = fixture_stories(config)
-        usage = {"input_tokens": 0, "output_tokens": 0}
-    else:
-        raw_text, hit_max_turns, usage, tool_log = run_agent(config, history)
-        if hit_max_turns:
-            print(raw_text)
-            sys.exit(1)
-
-        # Archived before parsing, so a run that fails to parse is still
-        # captured for debugging why. No-op unless gcs + DIGEST_ARCHIVE=true.
-        run_timestamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
-        upload_run_archive(run_timestamp, {
-            "timestamp": run_timestamp,
-            "tool_results": [
-                {"tool": t["tool"], "args": t["args"], "result": str(t["result"])[:2000]}
-                for t in tool_log
-            ],
-            "final_json": _try_parse_json_reply(raw_text),
-        })
-
-        digest = parse_digest(raw_text)
-        if digest is None:
-            print(raw_text)
-            sys.exit(1)
-
-    cutoff = (date.today() - timedelta(days=config["lookback_days"])).isoformat()
-    lead, secondary, sections = prepare_front_page(digest, cutoff)
-    stories = build_render_stories(lead, secondary, sections)
-
-    # Deliver BEFORE persisting. If delivery fails (send() exits non-zero
-    # internally on a failed email), nothing below runs, so no story gets
-    # marked "told" without actually reaching the reader - a retry will
-    # just pick the same stories up again. The failure mode this avoids is
-    # saving first: a crash or failed send between save and delivery would
-    # silently lose a story forever. Worst case now is the opposite and far
-    # safer - a crash between send and save can at most repeat a story in
-    # tomorrow's digest, never lose one.
-    rendered = render_digest(
-        lead, secondary, sections,
-        digest.get("ticker", []), digest.get("scoreboard", []), digest.get("sources", []),
-        digest.get("disclosure"), history,
-    )
-    front_page = {
-        "lead": lead, "secondary": secondary, "sections": sections,
-        "ticker": digest.get("ticker", []), "scoreboard": digest.get("scoreboard", []),
-        "sources": digest.get("sources", []), "disclosure": digest.get("disclosure"),
+    usage = {
+        "input_tokens": 0, "output_tokens": 0,
+        "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0,
     }
-    deliver(rendered, stories, title=config["title"], tagline=config["tagline"],
-            recipient=config["recipient"], front_page=front_page)
+    try:
+        if FIXTURE:
+            print("[fixture] skipping the model and all tools; using a canned front-page digest.")
+            digest = fixture_stories(config)
+        else:
+            raw_text, usage, tool_log, digest = run_agent_with_repair(config, history)
 
-    if not DRY_RUN:
-        if lead is not None:
-            save_story(
-                topic=lead.get("topic", ""), headline=lead["headline"],
-                summary=_lead_summary(lead), url=lead["url"], update_of=lead.get("update_of"),
-            )
-        for item in secondary:
-            save_story(
-                topic=item.get("topic", ""), headline=item["headline"],
-                summary=item.get("summary", ""), url=item["url"], update_of=item.get("update_of"),
-            )
-        for section in sections:
-            for brief in section["briefs"]:
-                save_story(
-                    topic=section["name"], headline=brief["headline"],
-                    summary=brief.get("summary", ""), url=brief["url"], update_of=brief.get("update_of"),
+            # Archived regardless of outcome, so a run that fails to parse
+            # (even after the repair attempt) is still captured for
+            # debugging why. No-op unless gcs + DIGEST_ARCHIVE=true.
+            run_timestamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
+            upload_run_archive(run_timestamp, {
+                "timestamp": run_timestamp,
+                "tool_results": [
+                    {"tool": t["tool"], "args": t["args"], "result": str(t["result"])[:2000]}
+                    for t in tool_log
+                ],
+                "final_json": _try_parse_json_reply(raw_text),
+            })
+
+            if digest is None:
+                print(
+                    "[error] agent_loop.run_agent_with_repair: the model's final reply "
+                    "did not validate as a front page (needs at least a usable \"lead\"), "
+                    "and the one repair retry (asking it to correct the JSON with tools "
+                    "off) also failed. Raw reply follows:"
                 )
-        sync_up()
+                print(raw_text)
+                sys.exit(1)
 
-    notes = digest.get("notes", "").strip()
-    if notes:
-        print(notes)
+        cutoff = (date.today() - timedelta(days=config["lookback_days"])).isoformat()
+        lead, secondary, sections = prepare_front_page(digest, cutoff)
+        stories = build_render_stories(lead, secondary, sections)
 
-    cost = (usage["input_tokens"] / 1_000_000 * PRICE_IN_PER_M
-            + usage["output_tokens"] / 1_000_000 * PRICE_OUT_PER_M)
-    print(
-        f"\n[usage] input_tokens={usage['input_tokens']} output_tokens={usage['output_tokens']} "
-        f"estimated_cost=${cost:.4f} (estimate)"
-    )
+        # Deliver BEFORE persisting. If delivery fails (send() exits non-zero
+        # internally on a failed email), nothing below runs, so no story gets
+        # marked "told" without actually reaching the reader - a retry will
+        # just pick the same stories up again. The failure mode this avoids is
+        # saving first: a crash or failed send between save and delivery would
+        # silently lose a story forever. Worst case now is the opposite and far
+        # safer - a crash between send and save can at most repeat a story in
+        # tomorrow's digest, never lose one.
+        rendered = render_digest(
+            lead, secondary, sections,
+            digest.get("ticker", []), digest.get("scoreboard", []), digest.get("sources", []),
+            digest.get("disclosure"), history,
+        )
+        front_page = {
+            "lead": lead, "secondary": secondary, "sections": sections,
+            "ticker": digest.get("ticker", []), "scoreboard": digest.get("scoreboard", []),
+            "sources": digest.get("sources", []), "disclosure": digest.get("disclosure"),
+        }
+        deliver(rendered, stories, title=config["title"], tagline=config["tagline"],
+                recipient=config["recipient"], front_page=front_page)
+
+        if not DRY_RUN:
+            if lead is not None:
+                save_story(
+                    topic=lead.get("topic", ""), headline=lead["headline"],
+                    summary=_lead_summary(lead), url=lead["url"], update_of=lead.get("update_of"),
+                )
+            for item in secondary:
+                save_story(
+                    topic=item.get("topic", ""), headline=item["headline"],
+                    summary=item.get("summary", ""), url=item["url"], update_of=item.get("update_of"),
+                )
+            for section in sections:
+                for brief in section["briefs"]:
+                    save_story(
+                        topic=section["name"], headline=brief["headline"],
+                        summary=brief.get("summary", ""), url=brief["url"], update_of=brief.get("update_of"),
+                    )
+            sync_up()
+
+        notes = digest.get("notes", "").strip()
+        if notes:
+            print(notes)
+    finally:
+        # try/finally so the usage line always prints, including when the
+        # run above exits non-zero (e.g. the undeliverable-digest path).
+        _print_usage_line(usage)

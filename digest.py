@@ -140,10 +140,12 @@ def run_gather_only(config: dict) -> list[dict]:
     from pipeline.gather import build_queries, search_all, gather_feeds, assign_ids
     from pipeline.filter import (
         drop_denylisted, drop_stale, drop_seen, dedupe_by_url, cluster, shortlist, fetch_top,
+        require_articles_for_data,
     )
 
     queries = build_queries(config, datetime.now())
-    print(f"[gather] {len(queries)} queries")
+    data_query_count = sum(1 for q in queries if q["section"] == "data")
+    print(f"[gather] {len(queries)} queries ({data_query_count} data)")
 
     search_results = search_all(queries, config["lookback_days"])
     feed_results = gather_feeds(config["sites"], config["lookback_days"])
@@ -171,15 +173,18 @@ def run_gather_only(config: dict) -> list[dict]:
     fetched = fetch_top(shortlisted)
     attempted = [f for f in fetched if f["has_article"] is not None]
     ok_count = sum(1 for f in attempted if f["has_article"])
-    print(f"[filter] fetched {ok_count} OK / {len(attempted) - ok_count} failed ({len(attempted)} attempted)\n")
+    print(f"[filter] fetched {ok_count} OK / {len(attempted) - ok_count} failed ({len(attempted)} attempted)")
 
-    _print_candidate_table(fetched)
+    complete = require_articles_for_data(fetched)
+    print(f"[filter] {len(complete)} after requiring articles for data items (dropped {len(fetched) - len(complete)})\n")
+
+    _print_candidate_table(complete)
 
     if os.environ.get("DIGEST_ARCHIVE", "").lower() == "true":
         timestamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
-        upload_run_archive(f"{timestamp}-gather", {"timestamp": timestamp, "candidates": fetched})
+        upload_run_archive(f"{timestamp}-gather", {"timestamp": timestamp, "candidates": complete})
 
-    return fetched
+    return complete
 
 
 if __name__ == "__main__":

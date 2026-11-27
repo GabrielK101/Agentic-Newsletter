@@ -10,8 +10,9 @@ def render_digest(lead: dict | None, secondary: list[dict], sections: list[dict]
                    ticker: list[dict], scoreboard: list[dict], sources: list[dict],
                    disclosure: str | None, history: list[dict]) -> str:
     """Build the front page as markdown: lead, then secondary stories,
-    then each section's briefs, then markets/scoreboard/sources/disclosure
-    if present."""
+    then markets/scoreboard (if present - right below that first group
+    of main stories, not buried at the bottom), then each section's
+    briefs, then sources/disclosure."""
     history_by_id = {h["id"]: h for h in history}
 
     def _update_line(item: dict) -> str | None:
@@ -49,20 +50,6 @@ def render_digest(lead: dict | None, secondary: list[dict], sections: list[dict]
             lines.append(item["url"])
             lines.append("")
 
-    for section in sections:
-        if not section["briefs"]:
-            continue
-        lines.append(f"## {section['name']}\n")
-        for brief in section["briefs"]:
-            lines.append(f"**{brief['headline']}**")
-            update_line = _update_line(brief)
-            if update_line:
-                lines.append(update_line)
-            if brief.get("summary"):
-                lines.append(brief["summary"])
-            lines.append(brief["url"])
-            lines.append("")
-
     if ticker:
         lines.append("## Markets\n")
         arrows = {"up": "^", "down": "v", "flat": "-"}
@@ -83,6 +70,20 @@ def render_digest(lead: dict | None, secondary: list[dict], sections: list[dict]
                 prefix = f"{row['label']}: " if row.get("label") else ""
                 lines.append(f"- {prefix}{row['line']}")
         lines.append("")
+
+    for section in sections:
+        if not section["briefs"]:
+            continue
+        lines.append(f"## {section['name']}\n")
+        for brief in section["briefs"]:
+            lines.append(f"**{brief['headline']}**")
+            update_line = _update_line(brief)
+            if update_line:
+                lines.append(update_line)
+            if brief.get("summary"):
+                lines.append(brief["summary"])
+            lines.append(brief["url"])
+            lines.append("")
 
     if sources:
         lines.append("## Sources\n")

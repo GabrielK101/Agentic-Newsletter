@@ -13,9 +13,10 @@ _DEFAULT_GENERAL_FOCUS = (
     "the biggest global stories of the day, plus one or two genuinely "
     "interesting or unexpected stories"
 )
-_TOPIC_KEYS = {"name", "focus", "commentary", "data"}
+_TOPIC_KEYS = {"name", "focus", "commentary", "data", "data_section"}
 _VALID_TICKER_KEYS = {"sp500", "nasdaq", "dow", "ftse", "brent", "gbpusd"}
 _VALID_SPORTS_KEYS = {"f1", "premier_league"}
+_VALID_DATA_SECTIONS = {"markets", "sport"}
 
 
 def load_config(path: str | None = None) -> dict:
@@ -100,6 +101,17 @@ def load_config(path: str | None = None) -> dict:
                     f"config key 'topics[{i}].data.sports' has unknown value(s) "
                     f"{sorted(unknown_sports)}; valid: {sorted(_VALID_SPORTS_KEYS)}"
                 )
+
+        # data_section: unrelated to the "data" dict above (that one feeds the
+        # code-sourced ticker/scoreboard override) - this tags a topic for the
+        # gather/filter pipeline's build_queries, which adds a dedicated
+        # closing-levels/results-and-standings query for it (see gather.py).
+        data_section = topic.get("data_section")
+        if data_section is not None and data_section not in _VALID_DATA_SECTIONS:
+            raise ValueError(
+                f"config key 'topics[{i}].data_section' must be one of "
+                f"{sorted(_VALID_DATA_SECTIONS)} or omitted, got {data_section!r}"
+            )
 
     if "sites" not in raw:
         raise ValueError("config is missing required key 'sites'")

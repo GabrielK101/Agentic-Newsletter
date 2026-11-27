@@ -9,14 +9,24 @@ Each candidate dict has: id, section, title, url, domain, snippet,
 published (YYYY-MM-DD or None), source_query.
 """
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime
 from urllib.parse import urlparse
 import json
 
 from sources.tools import _tavily_client, _to_date, find_feed, read_feed
 
-MAX_QUERIES = 14           # total query budget across topics + general news
+MAX_QUERIES = 14           # total query budget across topics + general news + data
 MAX_SEARCH_WORKERS = 5
 SEARCH_MAX_RESULTS = 8
+
+# "data_section: markets" gets this one query (deduped if several topics
+# share it - the instruments it covers aren't topic-specific); "data_section:
+# sport" gets one per topic, since each sport's results/standings query is
+# genuinely different. Both use the actual date, not a relative phrase like
+# "latest", so the search targets the real most-recent session/round.
+MARKETS_QUERY_TEMPLATE = "stock market close {date}"
+SPORT_QUERY_TEMPLATE = "{topic} results and standings {date}"
+DATA_SECTION = "data"
 
 
 def _domain_of(url: str) -> str:
@@ -38,25 +48,57 @@ def _topic_queries(topic: dict) -> list[str]:
     return queries
 
 
+def _data_queries(config: dict, now: datetime) -> list[dict]:
+    """One query per topic tagged data_section: "markets" or "sport" (see
+    config.py), each marked section="data" rather than the topic's own
+    name - these feed the "always fetch, has_article required" path in
+    filter.py, not the normal per-topic section. The markets query is
+    deduped (it's the same handful of instruments regardless of which
+    topic asked for it); every sport query is kept since each sport's
+    results/standings are genuinely different."""
+    date_str = now.strftime("%d %B %Y")
+    queries = []
+    seen = set()
+
+    def _add(query: str) -> None:
+        if query not in seen:
+            seen.add(query)
+            queries.append({"query": query, "section": DATA_SECTION})
+
+    for topic in config["topics"]:
+        data_section = topic.get("data_section")
+        if data_section == "markets":
+            _add(MARKETS_QUERY_TEMPLATE.format(date=date_str))
+        elif data_section == "sport":
+            _add(SPORT_QUERY_TEMPLATE.format(topic=topic["name"], date=date_str))
+
+    return queries
+
+
 def build_queries(config: dict, now=None) -> list[dict]:
     """Deterministic query list: one or two per configured topic (name +
-    focus), plus general-news queries if config['general_news'] is true.
-    Capped at MAX_QUERIES total. `now` is accepted for a future
-    time-sensitive query variant but isn't used yet - deterministic given
-    the same config either way."""
-    queries = []
+    focus), general-news queries if config['general_news'] is true, and
+    one data query per topic tagged data_section (see _data_queries).
+    Data queries are never truncated away by MAX_QUERIES - everything
+    else is capped first to leave room for them, since they're required
+    (filter.py's fetch_top always fetches them)."""
+    now = now or datetime.now()
+    data_queries = _data_queries(config, now)
+
+    other_queries = []
     for topic in config["topics"]:
         for q in _topic_queries(topic):
-            queries.append({"query": q, "section": topic["name"]})
+            other_queries.append({"query": q, "section": topic["name"]})
 
     if config.get("general_news"):
-        queries.append({"query": "world news today", "section": "general"})
-        queries.append({"query": "top news today", "section": "general"})
+        other_queries.append({"query": "world news today", "section": "general"})
+        other_queries.append({"query": "top news today", "section": "general"})
         focus = (config.get("general_focus") or "").strip()
         if focus:
-            queries.append({"query": focus, "section": "general"})
+            other_queries.append({"query": focus, "section": "general"})
 
-    return queries[:MAX_QUERIES]
+    budget_for_other = max(0, MAX_QUERIES - len(data_queries))
+    return other_queries[:budget_for_other] + data_queries
 
 
 def _search_one(query_obj: dict, lookback_days: int) -> list[dict]:

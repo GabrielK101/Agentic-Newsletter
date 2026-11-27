@@ -19,6 +19,7 @@ topics:
       recent events: race results and incidents, technical and regulation
       news, driver and team moves. Skip betting, previews and fluff.
     commentary: none
+    data_section: sport
   - name: Big tech
     focus: >
       Skim depth. Major business moves, product launches, and policy or
@@ -32,6 +33,7 @@ topics:
       what is scheduled next. Skip personal-finance tips, trading commentary
       and video.
     commentary: none
+    data_section: markets
 
 sites:
   - https://www.wired.com

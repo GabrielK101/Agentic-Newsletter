@@ -33,6 +33,8 @@ TOTAL_SHORTLIST_CAP = 40
 FETCH_TOP_K = 12
 FETCH_MAX_WORKERS = 5
 ARTICLE_TEXT_LIMIT = 3000
+ARTICLE_TEXT_LIMIT_DATA = 6000  # data-section articles (market closes, standings tables) need more room
+DATA_SECTION = "data"
 
 _STOPWORDS = frozenset({
     "a", "an", "the", "to", "of", "in", "on", "for", "and", "is", "are",
@@ -165,16 +167,25 @@ def shortlist(representatives: list[dict], per_section: int = PER_SECTION_SHORTL
 
 def _fetch_targets(shortlisted: list[dict], k: int) -> list[dict]:
     """The items to actually fetch: every section's single highest-scoring
-    item (always included, even if that pushes past k), topped up with
-    the next-highest-scoring remaining items up to k total."""
+    item (always included, even if that pushes past k), EVERY "data"
+    section item regardless of score (each is a distinct data query -
+    markets, or one specific sport's standings - and all of them are
+    required, not just whichever scores highest), topped up with the
+    next-highest-scoring remaining items up to k total."""
     best_per_section: dict[str, dict] = {}
     for item in shortlisted:
         section = item.get("section", "")
         if section not in best_per_section or item.get("score", 0) > best_per_section[section].get("score", 0):
             best_per_section[section] = item
 
-    required_ids = {item["id"] for item in best_per_section.values()}
-    targets = list(best_per_section.values())
+    required = list(best_per_section.values())
+    required_ids = {item["id"] for item in required}
+    for item in shortlisted:
+        if item.get("section") == DATA_SECTION and item["id"] not in required_ids:
+            required.append(item)
+            required_ids.add(item["id"])
+
+    targets = required
     for item in sorted(shortlisted, key=lambda x: x.get("score", 0), reverse=True):
         if len(targets) >= k:
             break
@@ -183,7 +194,7 @@ def _fetch_targets(shortlisted: list[dict], k: int) -> list[dict]:
     return targets
 
 
-def _fetch_one(item: dict) -> tuple[str, bool, str | None]:
+def _fetch_one(item: dict, text_limit: int) -> tuple[str, bool, str | None]:
     raw = fetch_article(item["url"])
     try:
         parsed = json.loads(raw)
@@ -192,20 +203,30 @@ def _fetch_one(item: dict) -> tuple[str, bool, str | None]:
     text = parsed.get("text")
     if not text:
         return item["id"], False, None
-    return item["id"], True, text[:ARTICLE_TEXT_LIMIT]
+    return item["id"], True, text[:text_limit]
 
 
 def fetch_top(shortlisted: list[dict], k: int = FETCH_TOP_K, max_workers: int = FETCH_MAX_WORKERS) -> list[dict]:
     """Fetch article text for the top k shortlisted items (always
-    including the highest-scoring item per section), in parallel. Returns
-    the full shortlisted list with "has_article"/"article_text" added:
-    True/text for a successful fetch, False/None for an attempted-but-
-    failed fetch, and None/None for an item that wasn't selected for
-    fetching at all (so callers can tell "failed" from "not attempted")."""
+    including the highest-scoring item per section, plus every "data"
+    section item - see _fetch_targets), in parallel. "data" section items
+    get ARTICLE_TEXT_LIMIT_DATA instead of ARTICLE_TEXT_LIMIT, since a
+    market-close wrap or a standings table needs more room than a typical
+    news article. Returns the full shortlisted list with
+    "has_article"/"article_text" added: True/text for a successful fetch,
+    False/None for an attempted-but-failed fetch, and None/None for an
+    item that wasn't selected for fetching at all (so callers can tell
+    "failed" from "not attempted")."""
     targets = _fetch_targets(shortlisted, k)
     outcomes: dict[str, tuple[bool, str | None]] = {}
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        futures = [executor.submit(_fetch_one, item) for item in targets]
+        futures = [
+            executor.submit(
+                _fetch_one, item,
+                ARTICLE_TEXT_LIMIT_DATA if item.get("section") == DATA_SECTION else ARTICLE_TEXT_LIMIT,
+            )
+            for item in targets
+        ]
         for future in as_completed(futures):
             item_id, ok, text = future.result()
             outcomes[item_id] = (ok, text)
@@ -218,3 +239,11 @@ def fetch_top(shortlisted: list[dict], k: int = FETCH_TOP_K, max_workers: int = 
             ok, text = None, None
         enriched.append({**item, "has_article": ok, "article_text": text})
     return enriched
+
+
+def require_articles_for_data(items: list[dict]) -> list[dict]:
+    """Drop any "data" section item without a successfully fetched
+    article - a markets/sport data item with no article text has no
+    numbers to report, so it's useless downstream. Every other section
+    passes through untouched."""
+    return [i for i in items if i.get("section") != DATA_SECTION or i.get("has_article") is True]

@@ -37,7 +37,8 @@ def _ticker_html(ticker: list[dict]) -> str:
         color = _DIRECTION_COLOR.get(row.get("direction"), _MUTED)
         symbol = _DIRECTION_SYMBOL.get(row.get("direction"), "")
         cells.append(
-            f'<td width="33%" valign="top" style="padding:9px 8px;border-top:1px solid {_RULE};">'
+            f'<td width="33%" valign="top" align="center" '
+            f'style="padding:9px 8px;border-top:1px solid {_RULE};text-align:center;">'
             f'<div style="font-family:{_SANS};font-size:10.5px;font-weight:700;letter-spacing:1px;'
             f'text-transform:uppercase;color:{_MUTED};">{_esc(row.get("label", ""))}</div>'
             f'<div style="font-family:{_SANS};font-size:15px;font-weight:600;color:{_INK};margin-top:2px;">'

@@ -23,6 +23,10 @@ topics:
     # data:
     #   ticker: [sp500, ftse]
     #   sports: [f1]
+    # Optional, unrelated to the above: tag this topic as markets or sport
+    # coverage so the gather/filter pipeline (--gather-only) adds a dedicated
+    # closing-levels (markets) or results-and-standings (sport) query for it.
+    # data_section: markets
 
 sites:
   - https://example.com

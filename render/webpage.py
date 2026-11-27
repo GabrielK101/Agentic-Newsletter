@@ -33,8 +33,7 @@ _SECONDARY_SUMMARY_WORDS = SUMMARY_CEILING_MAJOR
 _BRIEF_SUMMARY_WORDS = SUMMARY_CEILING_BRIEF
 
 _FONTS_HREF = (
-    "https://fonts.googleapis.com/css2?family=UnifrakturMaguntia"
-    "&family=Playfair+Display:ital,wght@0,700;0,900;1,700"
+    "https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,700;0,900;1,700"
     "&family=Libre+Caslon+Text:ital,wght@0,400;0,700;1,400"
     "&family=Inter:wght@500;700&display=swap"
 )
@@ -68,15 +67,16 @@ a:hover{{color:{_ACCENT_HOVER}}}
 .score{{display:flex;justify-content:space-between;font-family:'Inter',sans-serif;
   font-size:13px;padding:5px 0;border-bottom:1px dotted {_RULE_DOTTED}}}
 .score b{{font-weight:700}}
-.tick{{display:flex;flex-direction:column;gap:2px;font-family:'Inter',sans-serif;font-size:12px}}
+.tick{{display:flex;flex-direction:column;align-items:center;text-align:center;gap:2px;
+  font-family:'Inter',sans-serif;font-size:12px}}
 .tick span:first-child{{font-weight:700;letter-spacing:.06em;text-transform:uppercase;
   font-size:10.5px;color:{_MUTED}}}
 .up{{color:{_UP};font-weight:700}}
 .dn{{color:{_DOWN};font-weight:700}}
 .flat{{color:{_MUTED};font-weight:700}}
 .empty-note{{font-style:italic;color:{_MUTED};font-size:13px;margin:0}}
-.masthead{{font-family:'UnifrakturMaguntia',serif;font-weight:400;font-size:min(9vw,104px);
-  line-height:1;text-align:center;margin:14px 0 6px 0;color:{_INK}}}
+.masthead{{font-family:'Playfair Display',Georgia,serif;font-weight:900;font-size:min(7vw,64px);
+  letter-spacing:.02em;line-height:1.05;text-align:center;margin:14px 0 6px 0;color:{_INK}}}
 .metabar{{border-top:3px double {_INK};border-bottom:1px solid {_INK};padding:7px 0;
   display:flex;flex-wrap:wrap;gap:6px;justify-content:space-between;
   font-family:'Inter',sans-serif;font-size:12.5px;letter-spacing:.06em;text-transform:uppercase}}
@@ -87,6 +87,7 @@ a:hover{{color:{_ACCENT_HOVER}}}
 .leadbody-cols{{display:grid;grid-template-columns:1fr 1fr;gap:24px}}
 .briefsgrid{{display:grid;grid-template-columns:repeat(4,1fr);gap:28px;margin-top:26px}}
 .scoreboard-block{{margin-top:26px}}
+.score-panels{{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:24px}}
 .footer{{margin-top:28px;border-top:3px double {_INK};padding-top:8px;display:flex;
   flex-wrap:wrap;justify-content:space-between;gap:10px;font-family:'Inter',sans-serif;
   font-size:11px;letter-spacing:.05em;color:{_MUTED}}}
@@ -103,7 +104,7 @@ a:hover{{color:{_ACCENT_HOVER}}}
   .page{{padding:20px 18px}}
   .briefsgrid{{grid-template-columns:1fr}}
   .tickerrow{{grid-template-columns:repeat(2,1fr)}}
-  .masthead{{font-size:15vw}}
+  .masthead{{font-size:9vw}}
   .leadcol{{padding-right:0}}
 }}
 """
@@ -114,6 +115,17 @@ _DIRECTION_CLASS = {"up": "up", "down": "dn", "flat": "flat"}
 
 def _esc(value) -> str:
     return html.escape(str(value if value is not None else ""))
+
+
+def _highlight_daily(title: str) -> str:
+    """`title` escaped and uppercased, with the first case-insensitive
+    whole-word match of "Daily" picked out in the accent colour -
+    matches the masthead style used in the email (see
+    email_components._highlight_daily). No match -> plain escaped text."""
+    import re
+    escaped = _esc(title.upper())
+    pattern = re.compile(r"\bDAILY\b", re.IGNORECASE)
+    return pattern.sub(lambda m: f'<span style="color:{_ACCENT};">{m.group(0)}</span>', escaped, count=1)
 
 
 def _href_attr(url: str | None) -> str:
@@ -253,8 +265,9 @@ def _ticker_html(ticker: list[dict]) -> str:
 
 
 def _scoreboard_html(scoreboard: list[dict]) -> str:
-    """One panel per "group" (sport/competition), each with its own
-    sub-heading, then rows of optional sub-label + line."""
+    """One panel per "group" (sport/competition), laid out side by side
+    (score-panels grid, wraps to 1 column on narrow screens); within each
+    panel, rows (matches/standings lines) stack vertically."""
     if not scoreboard:
         return ""
     groups: dict[str, list[dict]] = {}
@@ -269,11 +282,15 @@ def _scoreboard_html(scoreboard: list[dict]) -> str:
             for row in rows
         )
         panels.append(
+            '<div>'
             f'<p style="font-family:\'Inter\',sans-serif;font-weight:700;font-size:11px;'
             f'letter-spacing:.1em;text-transform:uppercase;color:{_ACCENT};margin:0 0 4px 0;">'
-            f'{_esc(group)}</p>{row_html}'
+            f'{_esc(group)}</p>{row_html}</div>'
         )
-    return f'<div class="scoreboard-block"><p class="sec">Scoreboard</p>{"".join(panels)}</div>'
+    return (
+        '<div class="scoreboard-block"><p class="sec">Scoreboard</p>'
+        f'<div class="score-panels">{"".join(panels)}</div></div>'
+    )
 
 
 def _footer_html(sources: list[dict], disclosure: str | None) -> str:
@@ -310,7 +327,7 @@ def render_web(digest: dict, title: str = "The Daily Digest",
 
     body = (
         '<div class="page">'
-        f'<h1 class="masthead">{_esc(title)}</h1>'
+        f'<h1 class="masthead">{_highlight_daily(title)}</h1>'
         '<div class="metabar">'
         f'<span>{_esc(date_str)}</span>'
         f'<span>{_esc(section_names)}</span>'
@@ -321,8 +338,8 @@ def render_web(digest: dict, title: str = "The Daily Digest",
         f'<div class="col leadcol">{_lead_html(lead)}</div>'
         f'<div class="col">{_secondary_html(secondary)}</div>'
         "</div>"
-        + f'<div class="briefsgrid">{"".join(_section_column_html(s) for s in sections)}</div>'
         + _scoreboard_html(scoreboard)
+        + f'<div class="briefsgrid">{"".join(_section_column_html(s) for s in sections)}</div>'
         + _footer_html(sources, disclosure)
         + "</div>"
     )

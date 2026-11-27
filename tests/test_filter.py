@@ -1,7 +1,8 @@
 """pytest tests for filter.py: dedupe, stale filter, seen filter, clustering
-on near-duplicate titles, and shortlist caps. Run with:
-pytest tests/test_filter.py -q
+on near-duplicate titles, shortlist caps, and the data-section fetch
+requirements. Run with: pytest tests/test_filter.py -q
 """
+import json
 import sys
 from datetime import date
 from pathlib import Path
@@ -118,3 +119,52 @@ def test_shortlist_respects_total_cap():
     candidates = [{**_candidate(f"c{i}", section=f"s{i}"), "score": 1} for i in range(50)]
     result = pipeline_filter.shortlist(candidates, per_section=8, total_cap=5)
     assert len(result) == 5
+
+
+# --- fetch_top: data-section items are always fetched ---
+
+def _fake_fetch_article(text):
+    def _fetch(url):
+        return json.dumps({"title": "t", "text": text, "published": None})
+    return _fetch
+
+
+def test_fetch_top_always_fetches_every_data_item_even_with_low_score():
+    # 15 high-scoring non-data items (more than k) plus 2 low-scoring data
+    # items that would never make a plain top-k cut.
+    shortlisted = [{**_candidate(f"n{i}"), "score": 100 - i} for i in range(15)]
+    shortlisted += [
+        {**_candidate("d1", section="data"), "score": 0},
+        {**_candidate("d2", section="data"), "score": 0},
+    ]
+    with mock.patch.object(pipeline_filter, "fetch_article", side_effect=_fake_fetch_article("some text")):
+        fetched = pipeline_filter.fetch_top(shortlisted, k=5)
+    by_id = {f["id"]: f for f in fetched}
+    assert by_id["d1"]["has_article"] is True
+    assert by_id["d2"]["has_article"] is True
+
+
+def test_fetch_top_uses_larger_text_limit_for_data_items():
+    long_text = "word " * 2000  # longer than both limits
+    with mock.patch.object(pipeline_filter, "fetch_article", side_effect=_fake_fetch_article(long_text)):
+        fetched = pipeline_filter.fetch_top([
+            {**_candidate("n1"), "score": 10},
+            {**_candidate("d1", section="data"), "score": 10},
+        ], k=5)
+    by_id = {f["id"]: f for f in fetched}
+    assert len(by_id["n1"]["article_text"]) == pipeline_filter.ARTICLE_TEXT_LIMIT
+    assert len(by_id["d1"]["article_text"]) == pipeline_filter.ARTICLE_TEXT_LIMIT_DATA
+
+
+# --- require_articles_for_data ---
+
+def test_require_articles_for_data_drops_only_failed_data_items():
+    items = [
+        {**_candidate("n1"), "has_article": False},            # non-data, failed fetch - kept
+        {**_candidate("n2"), "has_article": None},              # non-data, not attempted - kept
+        {**_candidate("d1", section="data"), "has_article": True},   # data, succeeded - kept
+        {**_candidate("d2", section="data"), "has_article": False},  # data, failed - dropped
+        {**_candidate("d3", section="data"), "has_article": None},   # data, not attempted - dropped
+    ]
+    kept = pipeline_filter.require_articles_for_data(items)
+    assert {i["id"] for i in kept} == {"n1", "n2", "d1"}

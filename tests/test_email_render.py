@@ -7,8 +7,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from email_render import _MAX_HTML_BYTES, render_email_html, render_email_text
-from newsletter_render import clamp_summary
+from render.email_render import _MAX_HTML_BYTES, render_email_html, render_email_text
+from render.newsletter_render import clamp_summary
 
 
 # --- clamp_summary: abbreviations and initials must not look like sentence ends ---

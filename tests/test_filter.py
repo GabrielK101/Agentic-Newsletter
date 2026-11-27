@@ -9,7 +9,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-import filter as pipeline_filter
+from pipeline import filter as pipeline_filter
 
 
 def _candidate(id_, section="tech", title="A headline", url=None, domain="example.com",

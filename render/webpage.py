@@ -12,7 +12,7 @@ newsletter_render.format_relative_date.
 import html
 from datetime import date as date_cls
 
-from newsletter_render import (
+from render.newsletter_render import (
     SUMMARY_CEILING_BRIEF, SUMMARY_CEILING_HERO, SUMMARY_CEILING_MAJOR,
     clamp_summary, follows_text, format_relative_date, safe_url,
 )

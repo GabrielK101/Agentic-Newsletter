@@ -12,7 +12,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from urllib.parse import urlparse
 import json
 
-from tools import _tavily_client, _to_date, find_feed, read_feed
+from sources.tools import _tavily_client, _to_date, find_feed, read_feed
 
 MAX_QUERIES = 14           # total query budget across topics + general news
 MAX_SEARCH_WORKERS = 5

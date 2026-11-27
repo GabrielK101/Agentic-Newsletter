@@ -26,9 +26,9 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 import storage
-from email_render import render_email_html, render_email_text
-from newsletter_render import render_html, render_teaser_html, render_teaser_text, render_text
-from webpage import render_web
+from render.email_render import render_email_html, render_email_text
+from render.newsletter_render import render_html, render_teaser_html, render_teaser_text, render_text
+from render.webpage import render_web
 
 load_dotenv()
 

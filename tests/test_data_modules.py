@@ -10,8 +10,8 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-import market_data
-import sports_data
+from sources import market_data
+from sources import sports_data
 
 
 # --- market_data ---

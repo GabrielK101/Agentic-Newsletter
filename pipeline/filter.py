@@ -15,12 +15,13 @@ from datetime import date, datetime, timedelta
 from urllib.parse import urlparse
 
 from db import normalize_url, seen_url
-from tools import fetch_article
+from sources.tools import fetch_article
 
-# Mirrors digest.py's DENYLIST_DOMAINS (social platforms, not primary
+# Mirrors front_page.py's DENYLIST_DOMAINS (social platforms, not primary
 # reporting) - kept separate rather than imported, so this pipeline has no
-# import-time dependency on digest.py (which pulls in the model/delivery/
-# storage stack). Keep the two lists in sync if either changes.
+# import-time dependency on front_page.py (which pulls in market_data,
+# sports_data, and newsletter_render). Keep the two lists in sync if either
+# changes.
 DENYLIST_DOMAINS = frozenset({
     "facebook.com", "x.com", "twitter.com", "instagram.com",
     "tiktok.com", "reddit.com", "youtube.com",

@@ -28,6 +28,7 @@ DRY_RUN = "--dry-run" in sys.argv[1:]
 SEND = "--send" in sys.argv[1:]
 FIXTURE = "--fixture" in sys.argv[1:]  # skip the model/tools; use a canned front page
 CHECK = "--check" in sys.argv[1:]  # validate config/env only; no model, tool, or email calls
+GATHER_ONLY = "--gather-only" in sys.argv[1:]  # run gather+filter only; no model, DB write, or email
 
 if FIXTURE:
     DRY_RUN = True  # fixture stories must never be able to reach the DB
@@ -425,11 +426,86 @@ def run_check() -> int:
     return 0 if ok else 1
 
 
+def _print_candidate_table(items: list[dict]) -> None:
+    headers = ["id", "section", "domain", "published", "cluster_size", "has_article", "title"]
+    rows = []
+    for item in items:
+        title = str(item.get("title", ""))
+        if len(title) > 70:
+            title = title[:69] + "…"
+        rows.append([str(item.get(h, "")) for h in headers[:-1]] + [title])
+
+    widths = [max(len(h), *(len(r[i]) for r in rows)) if rows else len(h) for i, h in enumerate(headers)]
+
+    def _row(cells):
+        return " | ".join(cell.ljust(w) for cell, w in zip(cells, widths))
+
+    print(_row(headers))
+    print("-+-".join("-" * w for w in widths))
+    for r in rows:
+        print(_row(r))
+
+
+def run_gather_only(config: dict) -> list[dict]:
+    """--gather-only: run the fixed (non-agentic) gather + filter pipeline
+    and print counts at each stage plus the final shortlist as a table.
+    Never calls the model, never sends email, never writes the DB (only
+    drop_seen *reads* it)."""
+    from gather import build_queries, search_all, gather_feeds, assign_ids
+    from filter import (
+        drop_denylisted, drop_stale, drop_seen, dedupe_by_url, cluster, shortlist, fetch_top,
+    )
+
+    queries = build_queries(config, datetime.now())
+    print(f"[gather] {len(queries)} queries")
+
+    search_results = search_all(queries, config["lookback_days"])
+    feed_results = gather_feeds(config["sites"], config["lookback_days"])
+    candidates = assign_ids(search_results + feed_results)
+    print(f"[gather] {len(candidates)} raw results ({len(search_results)} search, {len(feed_results)} feed)")
+
+    after_denylist = drop_denylisted(candidates)
+    print(f"[filter] {len(after_denylist)} after denylist (dropped {len(candidates) - len(after_denylist)})")
+
+    after_stale = drop_stale(after_denylist, config["lookback_days"])
+    print(f"[filter] {len(after_stale)} after stale filter (dropped {len(after_denylist) - len(after_stale)})")
+
+    after_seen = drop_seen(after_stale)
+    print(f"[filter] {len(after_seen)} after seen filter (dropped {len(after_stale) - len(after_seen)})")
+
+    after_dedupe = dedupe_by_url(after_seen)
+    print(f"[filter] {len(after_dedupe)} after url dedupe (dropped {len(after_seen) - len(after_dedupe)})")
+
+    clustered = cluster(after_dedupe)
+    print(f"[filter] {len(clustered)} after clustering ({len(after_dedupe)} candidates)")
+
+    shortlisted = shortlist(clustered)
+    print(f"[filter] {len(shortlisted)} shortlisted")
+
+    fetched = fetch_top(shortlisted)
+    attempted = [f for f in fetched if f["has_article"] is not None]
+    ok_count = sum(1 for f in attempted if f["has_article"])
+    print(f"[filter] fetched {ok_count} OK / {len(attempted) - ok_count} failed ({len(attempted)} attempted)\n")
+
+    _print_candidate_table(fetched)
+
+    if os.environ.get("DIGEST_ARCHIVE", "").lower() == "true":
+        timestamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
+        upload_run_archive(f"{timestamp}-gather", {"timestamp": timestamp, "candidates": fetched})
+
+    return fetched
+
+
 if __name__ == "__main__":
     if CHECK:
         sys.exit(run_check())
 
     config = load_config()
+
+    if GATHER_ONLY:
+        init_db()  # drop_seen reads the DB; never written here
+        run_gather_only(config)
+        sys.exit(0)
 
     for topic in config["topics"]:
         if topic["commentary"] != "none":

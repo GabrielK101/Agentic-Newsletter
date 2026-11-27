@@ -1,0 +1,48 @@
+The Daily Digest
+Monday 23 November 2026
+
+S&P 500: 6,812.40 +1.2%
+Brent: $93.21 -0.4%
+GBP/USD: 1.2650 0.0%
+
+Fixture secondary story, long
+A longer fixture summary for a secondary story, long enough to wrap across a couple of lines in a major-tier card.
+
+ALSO TODAY
+Fixture secondary story, short
+Short summary, one sentence only, nothing more to add.
+
+Fixture secondary story with no published date
+This item has no "published" key at all - the kicker should show no date.
+
+FORMULA 1
+Fixture brief with a follow-up reference
+Short summary, one sentence only, nothing more to add.
+<script>alert(1)</script> AT&T
+AT&T said <b>nothing</b> official yet about the breach.
+Fixture brief from yesterday
+Dated yesterday, so the kicker should read "Yesterday".
+
+WORLD
+Fixture World brief
+Short summary, one sentence only, nothing more to add.
+Fixture World brief with an over-long summary
+This brief's summary runs deliberately far past its own word ceiling so clamp_summary's truncation is actually visible in the rendered output rather than just asserted in a test - it keeps going with more clauses about the same minor story, repeating that nothing else of substance happened today beyond this…
+
+WORTH KNOWING
+Fixture Worth-knowing brief
+Short summary, one sentence only, nothing more to add.
+Fixture Worth-knowing brief, a couple of days old
+Dated two days ago, so the kicker should show the explicit weekday/day/month, not "Today".
+
+SCOREBOARD
+Formula 1
+Fixture GP: Driver A · Driver B · Driver C
+Drivers: Driver A leads Driver B by 98 pts
+Premier League
+Fixture FC 2-1 Example Town
+
+Read the full front page: https://storage.googleapis.com/lna-digest-web-tyu/editions/2026-11-23-abc123.html
+
+Sources: Example Wire, Example Daily
+This digest is produced by an automated agent and may contain errors.

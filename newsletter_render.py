@@ -46,12 +46,12 @@ CONTENT_WIDTH = 760  # overall canvas; wider than the traditional 600-640px
 # treatment as real model output), then again here at render time.
 SUMMARY_WORD_FLOOR = 8
 SUMMARY_CEILING_HERO = 110
-SUMMARY_CEILING_MAJOR = 70
+SUMMARY_CEILING_MAJOR = 80
 SUMMARY_CEILING_STANDARD = 45  # weight 2 - the front-page pipeline doesn't
                                # currently produce this tier (lead/
                                # secondary/brief map to HERO/MAJOR/BRIEF
                                # only); kept for the table's shape below.
-SUMMARY_CEILING_BRIEF = 25
+SUMMARY_CEILING_BRIEF = 50
 _SUMMARY_LIMITS = {
     "lead": SUMMARY_CEILING_HERO, 3: SUMMARY_CEILING_MAJOR,
     2: SUMMARY_CEILING_STANDARD, 1: SUMMARY_CEILING_BRIEF,
@@ -154,30 +154,57 @@ def _snippet_note(story: dict, size_px: int = 11) -> str:
     )
 
 
-def _kicker_text(story: dict) -> str:
-    """Plain escaped kicker text: any combination of "UPDATE", the topic,
-    and a relative date ("TODAY"/"YESTERDAY"/"THU 19 NOV"), joined by
-    " &middot; " - only the parts that actually exist. "" if there's
-    nothing to show."""
+def kicker_parts(story: dict, show_topic: bool = True) -> list[str]:
+    """Escaped, upper-cased kicker segments - the topic (unless
+    `show_topic` is False: inside a section, the section heading already
+    names it) and a relative date, but only when it's not "Today" (the
+    common case, not worth a label for). Shared by every renderer
+    (render_html, the web edition, the mobile email) so kicker rules stay
+    one single source of truth."""
     parts = []
-    if story.get("update_of") is not None:
-        parts.append("UPDATE")
-    topic = html.escape(str(story.get("topic", "")).upper())
-    if topic:
-        parts.append(topic)
+    if show_topic:
+        topic = html.escape(str(story.get("topic", "")).upper())
+        if topic:
+            parts.append(topic)
     date_label = format_relative_date(story.get("published"))
-    if date_label:
+    if date_label and date_label != "Today":
         parts.append(html.escape(date_label.upper()))
-    return " &middot; ".join(parts)
+    return parts
 
 
-def _kicker_html(story: dict, size_px: int) -> str:
-    text = _kicker_text(story)
+def follows_text(story: dict) -> str | None:
+    """"Follows: <prior headline>", or None. Relies on story["follows"]
+    being pre-resolved (digest.py, against "Already told" history) -
+    renderers never resolve ids themselves."""
+    prior_headline = story.get("follows")
+    if not prior_headline:
+        return None
+    return f"Follows: {prior_headline}"
+
+
+def _kicker_text(story: dict, show_topic: bool = True) -> str:
+    """Plain escaped kicker text: kicker_parts, joined by " &middot; ".
+    "" if there's nothing to show."""
+    return " &middot; ".join(kicker_parts(story, show_topic))
+
+
+def _kicker_html(story: dict, size_px: int, show_topic: bool = True) -> str:
+    text = _kicker_text(story, show_topic)
     if not text:
         return ""
     return (
         f'<div style="font-size:{size_px}px;font-weight:700;letter-spacing:2px;'
         f'color:{_ACCENT};margin-bottom:{_CARD_GAP}px;">{text}</div>'
+    )
+
+
+def _follows_html(story: dict, size_px: int = 11) -> str:
+    text = follows_text(story)
+    if not text:
+        return ""
+    return (
+        f'<div style="font-family:{_SERIF};font-size:{size_px}px;font-style:italic;'
+        f'color:{_MUTED};margin-bottom:{_CARD_GAP}px;">{html.escape(text)}</div>'
     )
 
 
@@ -192,20 +219,46 @@ def _first_sentence(text: str, limit: int = 140) -> str:
     return text[:limit].rstrip() + "…"
 
 
+_SENTENCE_END = re.compile(r"""[.!?]["')\]]?(?=\s+["'(\[]?[A-Z0-9]|\s*$)""")
+_ABBREVIATIONS = {
+    "corp", "inc", "ltd", "plc", "co", "mr", "mrs", "ms", "dr", "st", "jr", "sr",
+    "vs", "no", "u.s", "u.k", "e.g", "i.e", "approx", "est", "gov", "sen", "rep",
+}
+
+
+def sentence_ends(text: str):
+    """Yield each regex match that really ends a sentence - skips a "."
+    that's actually part of an abbreviation (e.g. "X Corp.") or an initial
+    (e.g. "J. Smith"), which would otherwise look like a sentence boundary
+    and cut the text off mid-thought."""
+    for m in _SENTENCE_END.finditer(text):
+        if text[m.start()] == ".":
+            before = re.search(r"([A-Za-z][A-Za-z.]*)$", text[:m.start()])
+            if before:
+                word = before.group(1)
+                if word.lower().rstrip(".") in _ABBREVIATIONS:
+                    continue
+                if len(word) == 1 and word.isupper():  # an initial, e.g. "J. Smith"
+                    continue
+        yield m
+
+
 def clamp_summary(text: str, max_words: int) -> str:
-    """Cut `text` to at most `max_words` words, preferring to stop at the
-    last sentence boundary within that limit; falls back to a hard cut plus
-    an ellipsis. Render-time only - stored text and the .md stay full."""
+    """Cut `text` to at most `max_words` words, stopping at the last real
+    sentence boundary inside the limit (not a "." that's really part of an
+    abbreviation or initial). Falls back to a hard cut plus an ellipsis if
+    there's no real boundary. Render-time only - stored text and the .md
+    stay full."""
     words = text.split()
     if len(words) <= max_words:
         return text
     truncated = " ".join(words[:max_words])
-    last_boundary = None
-    for m in re.finditer(r"[.!?](?:\s|$)", truncated):
-        last_boundary = m
-    if last_boundary:
-        return truncated[:last_boundary.end()].strip()
-    return truncated.rstrip() + "…"
+    last = None
+    for m in sentence_ends(truncated):
+        last = m
+    if last:
+        return truncated[:last.end()].strip()
+    return truncated.rstrip(" ,;:—-") + "…"
 
 
 def clean_summary(headline: str, summary: str, ceiling: int) -> str | None:
@@ -294,16 +347,32 @@ def _join_sections(sections: list[str]) -> str:
 # --- hero ---
 
 def _hero_content_html(hero: dict) -> str:
-    """The hero's own text HTML: kicker, headline, summary, read-more."""
+    """The hero's own text HTML: kicker, "Follows:" line, headline, dek
+    (its own italic line - never glued onto the body), body (each \\n\\n
+    paragraph its own <p>, so paragraph breaks survive), read-more."""
     headline = html.escape(str(hero.get("headline", "")))
-    summary = html.escape(clamp_summary(str(hero.get("summary", "")), _SUMMARY_LIMITS["lead"]))
+    dek = str(hero.get("dek") or "").strip()
+    body = str(hero.get("body") or hero.get("summary") or "")
+    body = clamp_summary(body, SUMMARY_CEILING_HERO)
+    paragraphs = [p.strip() for p in body.split("\n\n") if p.strip()]
     read_more = _read_more_link(hero.get("url", ""))
+
+    dek_html = (
+        f'<div style="font-family:{_SERIF};font-size:17px;line-height:1.35;font-style:italic;'
+        f'color:#3a3a3a;margin-top:{_HERO_GAP}px;">{html.escape(dek)}</div>'
+        if dek else ""
+    )
+    body_html = "".join(
+        f'<p style="font-family:{_SERIF};font-size:14px;line-height:1.55;color:#2a2a2a;'
+        f'margin:{_HERO_GAP}px 0 0 0;">{html.escape(p)}</p>'
+        for p in paragraphs
+    )
     return (
         _kicker_html(hero, 11)
-        + f'<div style="font-family:{_SERIF};font-size:26px;line-height:1.22;'
+        + _follows_html(hero)
+        + f'<div style="font-family:{_SERIF};font-size:28px;line-height:1.15;'
         f'font-weight:700;color:{_INK};">{headline}</div>'
-        + f'<div style="font-family:{_SERIF};font-size:14px;line-height:1.5;color:#3a3a3a;margin-top:{_HERO_GAP}px;">'
-        + summary + _snippet_note(hero, 12) + '</div>'
+        + dek_html + body_html + _snippet_note(hero, 12)
         + (f'<div style="margin-top:{_HERO_GAP}px;">{read_more}</div>' if read_more else "")
     )
 
@@ -325,6 +394,7 @@ def _grid_card(story: dict, headline_px: int, summary_limit: int) -> str:
     read_more = _read_more_link(story.get("url", ""))
     return (
         _kicker_html(story, 10)
+        + _follows_html(story)
         + f'<div style="font-family:{_SERIF};font-size:{headline_px}px;line-height:1.3;'
         f'font-weight:700;color:{_INK};">{headline}</div>'
         + f'<div style="font-family:{_SERIF};font-size:13px;line-height:1.45;color:#3a3a3a;margin-top:{_CARD_GAP}px;">'
@@ -377,25 +447,28 @@ def _pack_rows(cards: list[dict]) -> tuple[list[list[dict]], list[dict]]:
 # --- brief list ---
 
 def _brief_entry(story: dict) -> str:
-    """Kicker (its own small-caps line), headline, summary, and a "Read
-    more" link underneath - the same structure and sizing pattern as a
-    grid card (_grid_card), just smaller, so every tier reads as one
-    consistent style instead of briefs looking like a cut-down, oddly
-    inline version of the others."""
+    """Kicker (date only - inside a section, the section heading already
+    names the topic), "Follows:" line, then the headline itself as the
+    link (bold, no underline, ink colour - no leading "·", no trailing
+    "→", no separate "Read more" line), then its summary."""
     headline = html.escape(str(story.get("headline", "")))
     summary = html.escape(clamp_summary(str(story.get("summary", "")), SUMMARY_CEILING_BRIEF))
-    read_more = _read_more_link(story.get("url", ""))
+    safe = safe_url(story.get("url", ""))
+    headline_html = (
+        f'<a href="{html.escape(safe, quote=True)}" style="color:{_INK};'
+        f'text-decoration:none;font-weight:700;">{headline}</a>'
+        if safe != "#" else f'<span style="font-weight:700;color:{_INK};">{headline}</span>'
+    )
     return (
         f'<div style="padding:{_CARD_GAP}px 0;">'
-        + _kicker_html(story, 10)
-        + f'<div style="font-family:{_SERIF};font-size:15px;line-height:1.3;'
-        f'font-weight:700;color:{_INK};">{headline}</div>'
+        + _kicker_html(story, 10, show_topic=False)
+        + _follows_html(story)
+        + f'<div style="font-family:{_SERIF};font-size:15px;line-height:1.3;">{headline_html}</div>'
         + (
             f'<div style="font-family:{_SERIF};font-size:13px;line-height:1.4;color:#3a3a3a;'
             f'margin-top:{_CARD_GAP}px;">{summary}</div>'
             if summary else ""
         )
-        + (f'<div style="margin-top:{_CARD_GAP}px;">{read_more}</div>' if read_more else "")
         + '</div>'
     )
 

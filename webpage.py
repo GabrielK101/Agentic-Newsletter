@@ -14,7 +14,7 @@ from datetime import date as date_cls
 
 from newsletter_render import (
     SUMMARY_CEILING_BRIEF, SUMMARY_CEILING_HERO, SUMMARY_CEILING_MAJOR,
-    clamp_summary, format_relative_date, safe_url,
+    clamp_summary, follows_text, format_relative_date, safe_url,
 )
 
 _BODY_BG = "#e9e4d8"
@@ -146,6 +146,13 @@ def _kicker_html(text: str) -> str:
     return f'<p class="kicker">{_esc(text.upper())}</p>' if text else ""
 
 
+def _follows_html(item: dict) -> str:
+    text = follows_text(item)
+    if not text:
+        return ""
+    return f'<p style="font-style:italic;color:{_MUTED};font-size:12.5px;margin:0 0 6px 0;">{_esc(text)}</p>'
+
+
 def _kicker_for(item: dict) -> str:
     """The kicker text for `item`: its topic and a relative date
     ("Today"/"Yesterday"/"Thu 19 Nov"), joined by " · " - only the
@@ -182,7 +189,7 @@ def _lead_html(lead: dict | None) -> str:
     )
 
     return (
-        _kicker_html(_kicker_for(lead)) + headline_html + dek_html
+        _kicker_html(_kicker_for(lead)) + _follows_html(lead) + headline_html + dek_html
         + body_html + sources_html + _read_more(lead.get("url"))
     )
 
@@ -196,6 +203,7 @@ def _secondary_html(secondary: list[dict]) -> str:
         items.append(
             '<div class="secondary-item">'
             + _kicker_html(_kicker_for(item))
+            + _follows_html(item)
             + f'<h3 class="hd" style="font-size:22px;">{_linked(item.get("headline", ""), item.get("url"))}</h3>'
             + (f"<p>{_esc(summary)}</p>" if summary else "")
             + "</div>"
@@ -209,6 +217,7 @@ def _brief_html(brief: dict) -> str:
     return (
         '<div class="brief">'
         + _kicker_html(date_label)
+        + _follows_html(brief)
         + f'<h4>{_linked(brief.get("headline", ""), brief.get("url"))}</h4>'
         + (f"<p>{_esc(summary)}</p>" if summary else "")
         + "</div>"
@@ -244,14 +253,27 @@ def _ticker_html(ticker: list[dict]) -> str:
 
 
 def _scoreboard_html(scoreboard: list[dict]) -> str:
+    """One panel per "group" (sport/competition), each with its own
+    sub-heading, then rows of optional sub-label + line."""
     if not scoreboard:
         return ""
-    rows = "".join(
-        f'<div class="score"><span>{_esc(row.get("label", ""))}</span>'
-        f'<span>{_esc(row.get("line", ""))}</span></div>'
-        for row in scoreboard
-    )
-    return f'<div class="scoreboard-block"><p class="sec">Scoreboard</p>{rows}</div>'
+    groups: dict[str, list[dict]] = {}
+    for row in scoreboard:
+        groups.setdefault(row.get("group") or "Results", []).append(row)
+    panels = []
+    for group, rows in groups.items():
+        row_html = "".join(
+            '<div class="score">'
+            + (f'<span><b>{_esc(row.get("label", ""))}</b></span>' if row.get("label") else "<span></span>")
+            + f'<span>{_esc(row.get("line", ""))}</span></div>'
+            for row in rows
+        )
+        panels.append(
+            f'<p style="font-family:\'Inter\',sans-serif;font-weight:700;font-size:11px;'
+            f'letter-spacing:.1em;text-transform:uppercase;color:{_ACCENT};margin:0 0 4px 0;">'
+            f'{_esc(group)}</p>{row_html}'
+        )
+    return f'<div class="scoreboard-block"><p class="sec">Scoreboard</p>{"".join(panels)}</div>'
 
 
 def _footer_html(sources: list[dict], disclosure: str | None) -> str:

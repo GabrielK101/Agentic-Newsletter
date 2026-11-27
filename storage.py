@@ -11,12 +11,16 @@ Credentials only; no key files.
 """
 import json
 import os
+import re
+import secrets
 import sys
 from pathlib import Path
 
 from dotenv import load_dotenv
 
 load_dotenv()
+
+_EMAIL_PATTERN = re.compile(r"[\w.+-]+@[\w-]+\.[\w.-]+")
 
 _KNOWN_BACKENDS = {"local", "s3", "gcs"}
 
@@ -162,6 +166,71 @@ def upload_run_archive(timestamp: str, payload: dict) -> None:
     blob = gcs_storage.Client().bucket(bucket_name).blob(f"runs/{timestamp}.json")
     blob.upload_from_string(json.dumps(payload, indent=2, ensure_ascii=False), content_type="application/json")
     print(f"[storage] uploaded run archive to gs://{bucket_name}/runs/{timestamp}.json")
+
+
+def _assert_safe_for_public(html_content: str, recipient: str | None, notes: str) -> bool:
+    """True if `html_content` looks safe to publish to a PUBLIC bucket -
+    no email address, no recipient/config value, no "notes" text (which
+    is operator-facing, never meant for readers - see digest.py). False
+    (with a clear warning) otherwise; the caller must not publish."""
+    if _EMAIL_PATTERN.search(html_content):
+        print("[error] publish_public_edition: refusing to publish - an email address appears in the rendered page.")
+        return False
+    if recipient and recipient in html_content:
+        print("[error] publish_public_edition: refusing to publish - the recipient address appears in the rendered page.")
+        return False
+    if notes and notes.strip() and notes.strip() in html_content:
+        print("[error] publish_public_edition: refusing to publish - internal 'notes' text appears in the rendered page.")
+        return False
+    return True
+
+
+def publish_public_edition(html_content: str, date_str: str,
+                           recipient: str | None = None, notes: str = "") -> str | None:
+    """Upload `html_content` (the web edition) to the PUBLIC
+    DIGEST_WEB_BUCKET as editions/<date_str>-<token>.html (a fresh random
+    16-char token every run) and, if DIGEST_WEB_LATEST_TOKEN is set, also
+    as editions/latest-<that fixed token>.html. Returns the dated
+    edition's public URL (https://storage.googleapis.com/<bucket>/...),
+    or None if DIGEST_WEB_BUCKET isn't set, the safety check fails, or the
+    upload itself fails - callers must treat None as "send without a
+    link", never as fatal (see delivery.py).
+
+    Does NOT touch the bucket's or any object's ACLs/IAM. The bucket is
+    expected to already grant public read outside this code (e.g.
+    allUsers:roles/storage.legacyObjectReader, set up directly in GCP,
+    not by this codebase) - this function only ever uploads."""
+    bucket_name = os.environ.get("DIGEST_WEB_BUCKET")
+    if not bucket_name:
+        return None
+
+    if not _assert_safe_for_public(html_content, recipient, notes):
+        return None
+
+    token = secrets.token_hex(8)  # 16 hex characters
+    dated_path = f"editions/{date_str}-{token}.html"
+
+    try:
+        from google.cloud import storage as gcs_storage
+
+        bucket = gcs_storage.Client().bucket(bucket_name)
+
+        blob = bucket.blob(dated_path)
+        blob.cache_control = "public, max-age=300"
+        blob.upload_from_string(html_content, content_type="text/html; charset=utf-8")
+
+        latest_token = os.environ.get("DIGEST_WEB_LATEST_TOKEN")
+        if latest_token:
+            latest_blob = bucket.blob(f"editions/latest-{latest_token}.html")
+            latest_blob.cache_control = "public, max-age=300"
+            latest_blob.upload_from_string(html_content, content_type="text/html; charset=utf-8")
+
+        url = f"https://storage.googleapis.com/{bucket_name}/{dated_path}"
+        print(f"[storage] published web edition to {url}")
+        return url
+    except Exception as e:
+        print(f"[warning] publish_public_edition: upload failed, sending email without a link: {type(e).__name__}: {e}")
+        return None
 
 
 def _archive_digest_files(bucket) -> None:

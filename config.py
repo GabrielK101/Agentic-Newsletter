@@ -13,7 +13,9 @@ _DEFAULT_GENERAL_FOCUS = (
     "the biggest global stories of the day, plus one or two genuinely "
     "interesting or unexpected stories"
 )
-_TOPIC_KEYS = {"name", "focus", "commentary"}
+_TOPIC_KEYS = {"name", "focus", "commentary", "data"}
+_VALID_TICKER_KEYS = {"sp500", "nasdaq", "dow", "ftse", "brent", "gbpusd"}
+_VALID_SPORTS_KEYS = {"f1", "premier_league"}
 
 
 def load_config(path: str | None = None) -> dict:
@@ -73,6 +75,31 @@ def load_config(path: str | None = None) -> dict:
                 f"config key 'topics[{i}].commentary' must be one of "
                 f"{sorted(_VALID_COMMENTARY)}, got {topic['commentary']!r}"
             )
+
+        data = topic.setdefault("data", {})
+        if not isinstance(data, dict):
+            raise ValueError(f"config key 'topics[{i}].data' must be a mapping, got {type(data).__name__}")
+        unknown_data_keys = set(data) - {"ticker", "sports"}
+        if unknown_data_keys:
+            raise ValueError(f"config key 'topics[{i}].data' has unknown key(s): {sorted(unknown_data_keys)}")
+        if "ticker" in data:
+            if not isinstance(data["ticker"], list) or not all(isinstance(k, str) for k in data["ticker"]):
+                raise ValueError(f"config key 'topics[{i}].data.ticker' must be a list of strings")
+            unknown_ticker = set(data["ticker"]) - _VALID_TICKER_KEYS
+            if unknown_ticker:
+                raise ValueError(
+                    f"config key 'topics[{i}].data.ticker' has unknown instrument(s) "
+                    f"{sorted(unknown_ticker)}; valid: {sorted(_VALID_TICKER_KEYS)}"
+                )
+        if "sports" in data:
+            if not isinstance(data["sports"], list) or not all(isinstance(k, str) for k in data["sports"]):
+                raise ValueError(f"config key 'topics[{i}].data.sports' must be a list of strings")
+            unknown_sports = set(data["sports"]) - _VALID_SPORTS_KEYS
+            if unknown_sports:
+                raise ValueError(
+                    f"config key 'topics[{i}].data.sports' has unknown value(s) "
+                    f"{sorted(unknown_sports)}; valid: {sorted(_VALID_SPORTS_KEYS)}"
+                )
 
     if "sites" not in raw:
         raise ValueError("config is missing required key 'sites'")

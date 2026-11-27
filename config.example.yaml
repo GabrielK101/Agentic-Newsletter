@@ -17,6 +17,12 @@ topics:
       Replace this with what you actually want covered for this topic: the
       angle, the level of depth, and what to skip.
     commentary: none
+    # Optional: get the ticker/scoreboard from code instead of the model,
+    # for this topic. ticker instruments: sp500, nasdaq, dow, ftse, brent,
+    # gbpusd. sports: f1, premier_league (the latter needs FOOTBALL_DATA_API_KEY).
+    # data:
+    #   ticker: [sp500, ftse]
+    #   sports: [f1]
 
 sites:
   - https://example.com

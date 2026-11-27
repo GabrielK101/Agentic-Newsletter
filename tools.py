@@ -119,17 +119,26 @@ def _to_date(rfc2822_date):
         return None
 
 @tool
-def search_web(query: str, search_depth: str = "basic", max_results: int = 5, days: int = 3) -> str:
+def search_web(query: str, search_depth: str = "basic", max_results: int = 8, days: int = 3,
+                include_domains: list[str] = None) -> str:
     """Search the web for a topic and return matching stories with titles,
-    URLs, and short excerpts, restricted to the last `days` days. Use for
-    topic-based sources with no feed, or when find_feed finds nothing for a
-    given site. Put recency in `days`, not in the query text."""
+    URLs, published dates, and short excerpts, restricted to the last
+    `days` days. Use for topic-based sources with no feed, or when
+    find_feed finds nothing for a given site. Put recency in `days`, not
+    in the query text. Use search_depth "advanced" for market closes,
+    results and standings, or whenever "basic" results are thin or stale.
+    include_domains optionally restricts results to specific sources -
+    suggested lists: markets: reuters.com, apnews.com, cnbc.com,
+    finance.yahoo.com, marketwatch.com; sport: bbc.co.uk, skysports.com,
+    espn.com, formula1.com."""
     try:
         response = _tavily_client.search(
             query=query,
             search_depth=search_depth,
             topic="news",
             days=days,
+            max_results=max_results,
+            include_domains=include_domains,
         )
     except Exception as e:
         return f"Error: could not perform search for query '{query}' ({type(e).__name__}: {e})."

@@ -17,6 +17,8 @@ from fixtures import fixture_stories
 from config import load_config
 from db import init_db, recent_stories, save_story, seen_url
 from delivery import deliver
+import market_data
+import sports_data
 from newsletter_render import SUMMARY_CEILING_BRIEF, SUMMARY_CEILING_HERO, SUMMARY_CEILING_MAJOR, clean_summary
 from storage import sync_down, sync_up, upload_run_archive
 
@@ -94,6 +96,26 @@ def _passes_basis_check(item: dict) -> bool:
     return True
 
 
+def _code_ticker_and_scoreboard(config: dict) -> tuple[list[dict], list[dict]]:
+    """Fetch ticker/scoreboard data directly from code (market_data,
+    sports_data) for any topic that configures it - REPLACES the model's
+    own ticker/scoreboard outright when non-empty (see __main__). ([], [])
+    if no topic enables either, in which case the model's version stands
+    (still governed by the SYSTEM prompt's own ticker/scoreboard rules).
+    Never called in --fixture mode - these hit real external APIs."""
+    ticker, scoreboard = [], []
+    for topic in config["topics"]:
+        data = topic.get("data") or {}
+        if data.get("ticker"):
+            ticker.extend(market_data.get_ticker(data["ticker"]))
+        for sport in data.get("sports", []):
+            if sport == "f1":
+                scoreboard.extend(sports_data.get_f1())
+            elif sport == "premier_league":
+                scoreboard.extend(sports_data.get_football("premier_league", config["lookback_days"]))
+    return ticker, scoreboard
+
+
 def _try_parse_json_reply(text: str):
     """The model's raw JSON reply, parsed - or the raw text itself if it
     doesn't parse, so a malformed reply is still captured in the run
@@ -134,7 +156,28 @@ def _normalize_promoted_lead(item: dict) -> dict:
     return {**item, "dek": "", "body": item.get("summary", "")}
 
 
-def prepare_front_page(digest: dict, cutoff: str) -> tuple[dict | None, list[dict], list[dict]]:
+def _sort_and_filter_sections(sections: list[dict], config: dict) -> list[dict]:
+    """Deterministic section order: the configured topic order, then
+    "World", then "Worth knowing". Drops any section whose name matches
+    neither - a stray/misspelled section name disappears rather than
+    sorting to the end."""
+    order = [t["name"] for t in config["topics"]] + ["World", "Worth knowing"]
+    by_name = {s["name"]: s for s in sections}
+    return [by_name[name] for name in order if name in by_name]
+
+
+def _resolve_follows(items: list[dict], history_by_id: dict) -> None:
+    """Mutates each item in place, adding "follows" (the prior story's
+    headline, from "Already told" history) when "update_of" resolves to
+    something real - None otherwise. Renderers show a "Follows: <prior
+    headline>" line only when this is set; they never resolve ids
+    themselves."""
+    for item in items:
+        prior = history_by_id.get(item.get("update_of"))
+        item["follows"] = prior["headline"] if prior else None
+
+
+def prepare_front_page(digest: dict, cutoff: str, config: dict) -> tuple[dict | None, list[dict], list[dict]]:
     """Apply the lookback-days cutoff, the already-seen-url check, the
     low-trust-domain denylist, the article-basis requirement (lead and
     secondary only), and the summary floor/ceiling to every item BEFORE
@@ -142,7 +185,8 @@ def prepare_front_page(digest: dict, cutoff: str) -> tuple[dict | None, list[dic
     it doesn't, the first surviving secondary item - or, failing that,
     the first surviving brief - is promoted to lead instead. The lead is
     never allowed to be a stale, already-told, low-trust, snippet-basis,
-    or under-floor-summary story."""
+    or under-floor-summary story. Sections come back in deterministic
+    (configured topic, then World, then Worth knowing) order."""
     lead = digest.get("lead")
     secondary = [s for s in digest.get("secondary", []) if _is_fresh_and_new(s, cutoff)]
     secondary = [s for s in secondary if _passes_domain_check(s)]
@@ -150,7 +194,7 @@ def prepare_front_page(digest: dict, cutoff: str) -> tuple[dict | None, list[dic
     secondary = [s for s in secondary if _passes_summary_floor(s, "summary", SUMMARY_CEILING_MAJOR)]
 
     sections = []
-    for section in digest.get("sections", []):
+    for section in _sort_and_filter_sections(digest.get("sections", []), config):
         briefs = [b for b in section.get("briefs", []) if _is_fresh_and_new(b, cutoff)]
         briefs = [b for b in briefs if _passes_domain_check(b)]
         briefs = [b for b in briefs if _passes_summary_floor(b, "summary", SUMMARY_CEILING_BRIEF)]
@@ -184,10 +228,13 @@ def build_render_stories(lead: dict | None, secondary: list[dict], sections: lis
         stories.append({
             "topic": lead.get("topic", ""),
             "headline": lead["headline"],
+            "dek": lead.get("dek", ""),
+            "body": lead.get("body", "") or lead.get("summary", ""),
             "summary": _lead_summary(lead),
             "url": lead["url"],
             "published": lead.get("published"),
             "update_of": lead.get("update_of"),
+            "follows": lead.get("follows"),
             "lead": True,
             "weight": 3,
         })
@@ -199,6 +246,7 @@ def build_render_stories(lead: dict | None, secondary: list[dict], sections: lis
             "url": item["url"],
             "published": item.get("published"),
             "update_of": item.get("update_of"),
+            "follows": item.get("follows"),
             "lead": False,
             "weight": 3,
         })
@@ -211,6 +259,7 @@ def build_render_stories(lead: dict | None, secondary: list[dict], sections: lis
                 "url": brief["url"],
                 "published": brief.get("published"),
                 "update_of": brief.get("update_of"),
+                "follows": brief.get("follows"),
                 "lead": False,
                 "weight": 1,
             })
@@ -285,8 +334,14 @@ def render_digest(lead: dict | None, secondary: list[dict], sections: list[dict]
 
     if scoreboard:
         lines.append("## Scoreboard\n")
+        groups: dict[str, list[dict]] = {}
         for row in scoreboard:
-            lines.append(f"- {row['label']}: {row['line']}")
+            groups.setdefault(row.get("group", "Results"), []).append(row)
+        for group, rows in groups.items():
+            lines.append(f"**{group}**")
+            for row in rows:
+                prefix = f"{row['label']}: " if row.get("label") else ""
+                lines.append(f"- {prefix}{row['line']}")
         lines.append("")
 
     if sources:
@@ -336,6 +391,14 @@ def run_check() -> int:
         print(f"  {'set    ' if present else 'MISSING'} - {name}")
         if not present:
             ok = False
+
+    # Optional env vars: informational only, never fail the check -
+    # each gates a best-effort feature that degrades gracefully if unset
+    # (football scores are simply skipped; the web edition just doesn't
+    # get published/linked).
+    for name in ("FOOTBALL_DATA_API_KEY", "DIGEST_WEB_BUCKET"):
+        present = bool(os.environ.get(name))
+        print(f"  {'set    ' if present else 'unset  '} - {name} (optional)")
 
     if storage_backend == "gcs" and os.environ.get("DIGEST_GCS_BUCKET"):
         print("[check] GCS bucket:")
@@ -407,8 +470,23 @@ if __name__ == "__main__":
             print(raw_text)
             sys.exit(1)
 
+    if not FIXTURE:
+        code_ticker, code_scoreboard = _code_ticker_and_scoreboard(config)
+        if code_ticker:
+            digest["ticker"] = code_ticker
+        if code_scoreboard:
+            digest["scoreboard"] = code_scoreboard
+
     cutoff = (date.today() - timedelta(days=config["lookback_days"])).isoformat()
-    lead, secondary, sections = prepare_front_page(digest, cutoff)
+    lead, secondary, sections = prepare_front_page(digest, cutoff, config)
+
+    history_by_id = {h["id"]: h for h in history}
+    if lead is not None:
+        _resolve_follows([lead], history_by_id)
+    _resolve_follows(secondary, history_by_id)
+    for section in sections:
+        _resolve_follows(section["briefs"], history_by_id)
+
     stories = build_render_stories(lead, secondary, sections)
 
     # Deliver BEFORE persisting. If delivery fails (send() exits non-zero

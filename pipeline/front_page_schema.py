@@ -8,7 +8,7 @@ from render.newsletter_render import (
     clamp_summary, clean_summary, safe_url,
 )
 
-_MAX_WORDS_DEK = 30  # the one-line subhead - not one of the 4 summary tiers
+_MAX_WORDS_DEK = 25  # the one-line subhead (prompt: 12-25 words) - not one of the 4 summary tiers
 _MAX_SECONDARY = 5
 _MAX_SECTIONS = 6
 _MAX_BRIEFS_PER_SECTION = 6

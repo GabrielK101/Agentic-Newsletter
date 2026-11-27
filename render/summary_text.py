@@ -27,9 +27,13 @@ _CARD_GAP = 4    # vertical space between a card's own headline/summary/read-mor
 # digest.py's prepare_front_page so --fixture digests get the same
 # treatment as real model output), then again here at render time.
 SUMMARY_WORD_FLOOR = 8
-SUMMARY_CEILING_HERO = 110
-SUMMARY_CEILING_MAJOR = 80
-SUMMARY_CEILING_BRIEF = 50
+# Upper bound of each field's word range in the SYSTEM/EDIT_SYSTEM prompts
+# (lead body 70-100, secondary 35-60, brief 25-35) - kept aligned with the
+# prompts so clamp_summary's sentence-boundary truncation never actually
+# triggers on a well-behaved reply; it's a safety net, not the normal path.
+SUMMARY_CEILING_HERO = 100
+SUMMARY_CEILING_MAJOR = 60
+SUMMARY_CEILING_BRIEF = 35
 
 LONDON_TZ = ZoneInfo("Europe/London")
 

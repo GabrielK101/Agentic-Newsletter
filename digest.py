@@ -26,11 +26,23 @@ from storage import sync_down, sync_up, upload_run_archive
 
 load_dotenv()
 
+def _flag_value(name: str) -> str | None:
+    """The value after a space-separated CLI flag, e.g. "--engine pipeline"
+    -> "pipeline" - or None if the flag wasn't given."""
+    args = sys.argv[1:]
+    if name in args:
+        idx = args.index(name)
+        if idx + 1 < len(args):
+            return args[idx + 1]
+    return None
+
+
 DRY_RUN = "--dry-run" in sys.argv[1:]
 SEND = "--send" in sys.argv[1:]
 FIXTURE = "--fixture" in sys.argv[1:]  # skip the model/tools; use a canned front page
 CHECK = "--check" in sys.argv[1:]  # validate config/env only; no model, tool, or email calls
 GATHER_ONLY = "--gather-only" in sys.argv[1:]  # run gather+filter only; no model, DB write, or email
+ENGINE_OVERRIDE = _flag_value("--engine")  # "pipeline" | "agent" - overrides config's "engine" key
 
 if FIXTURE:
     DRY_RUN = True  # fixture stories must never be able to reach the DB
@@ -132,11 +144,12 @@ def _print_candidate_table(items: list[dict]) -> None:
         print(_row(r))
 
 
-def run_gather_only(config: dict) -> list[dict]:
-    """--gather-only: run the fixed (non-agentic) gather + filter pipeline
-    and print counts at each stage plus the final shortlist as a table.
-    Never calls the model, never sends email, never writes the DB (only
-    drop_seen *reads* it)."""
+def _run_gather_and_filter(config: dict) -> tuple[list[dict], int]:
+    """The gather+filter funnel shared by --gather-only and the real
+    pipeline engine: build queries, search Tavily, read feeds, then
+    denylist/stale/seen/dedupe/cluster/shortlist/fetch, printing a count
+    at each stage. Returns (final candidates, number of Tavily searches
+    run - one per query)."""
     from pipeline.gather import build_queries, search_all, gather_feeds, assign_ids
     from pipeline.filter import (
         drop_denylisted, drop_stale, drop_seen, dedupe_by_url, cluster, shortlist, fetch_top,
@@ -176,8 +189,18 @@ def run_gather_only(config: dict) -> list[dict]:
     print(f"[filter] fetched {ok_count} OK / {len(attempted) - ok_count} failed ({len(attempted)} attempted)")
 
     complete = require_articles_for_data(fetched)
-    print(f"[filter] {len(complete)} after requiring articles for data items (dropped {len(fetched) - len(complete)})\n")
+    print(f"[filter] {len(complete)} after requiring articles for data items (dropped {len(fetched) - len(complete)})")
 
+    return complete, len(queries)
+
+
+def run_gather_only(config: dict) -> list[dict]:
+    """--gather-only: run the fixed (non-agentic) gather + filter pipeline
+    and print counts at each stage plus the final shortlist as a table.
+    Never calls the model, never sends email, never writes the DB (only
+    drop_seen *reads* it)."""
+    complete, _ = _run_gather_and_filter(config)
+    print()
     _print_candidate_table(complete)
 
     if os.environ.get("DIGEST_ARCHIVE", "").lower() == "true":
@@ -192,6 +215,11 @@ if __name__ == "__main__":
         sys.exit(run_check())
 
     config = load_config()
+    if ENGINE_OVERRIDE is not None:
+        if ENGINE_OVERRIDE not in ("pipeline", "agent"):
+            print(f"[error] --engine must be 'pipeline' or 'agent', got {ENGINE_OVERRIDE!r}")
+            sys.exit(1)
+        config["engine"] = ENGINE_OVERRIDE
 
     if GATHER_ONLY:
         init_db()  # drop_seen reads the DB; never written here
@@ -210,15 +238,19 @@ if __name__ == "__main__":
     init_db()
     history = recent_stories(config["history_days"])
 
+    tavily_searches = 0
+
     if FIXTURE:
         print("[fixture] skipping the model and all tools; using a canned front-page digest.")
         digest = fixture_stories(config)
         usage = {"input_tokens": 0, "output_tokens": 0}
-    else:
+
+    elif config["engine"] == "agent":
         raw_text, hit_max_turns, usage, tool_log = run_agent(config, history)
         if hit_max_turns:
             print(raw_text)
             sys.exit(1)
+        tavily_searches = sum(1 for t in tool_log if t["tool"] == "search_web")
 
         # Archived before parsing, so a run that fails to parse is still
         # captured for debugging why. No-op unless gcs + DIGEST_ARCHIVE=true.
@@ -237,12 +269,37 @@ if __name__ == "__main__":
             print(raw_text)
             sys.exit(1)
 
-    if not FIXTURE:
         code_ticker, code_scoreboard = _code_ticker_and_scoreboard(config)
         if code_ticker:
             digest["ticker"] = code_ticker
         if code_scoreboard:
             digest["scoreboard"] = code_scoreboard
+
+    else:  # engine == "pipeline"
+        from pipeline.edit import run_edit_with_repair
+
+        candidates, tavily_searches = _run_gather_and_filter(config)
+
+        raw_text, usage, digest = run_edit_with_repair(config, history, candidates)
+
+        # Archived before the None check, same reasoning as the agent engine:
+        # a reply that fails to parse (even after repair) is still captured
+        # for debugging why. No-op unless gcs + DIGEST_ARCHIVE=true.
+        run_timestamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
+        upload_run_archive(run_timestamp, {
+            "timestamp": run_timestamp,
+            "candidates": candidates,
+            "final_json": _try_parse_json_reply(raw_text),
+        })
+
+        if digest is None:
+            print(
+                "[error] edit: the model's final reply did not validate as a front page "
+                "(needs at least a usable \"lead\" citing a real candidate id), and the "
+                "one repair retry also failed. Raw reply follows:"
+            )
+            print(raw_text)
+            sys.exit(1)
 
     cutoff = (date.today() - timedelta(days=config["lookback_days"])).isoformat()
     lead, secondary, sections = prepare_front_page(digest, cutoff, config)
@@ -303,6 +360,7 @@ if __name__ == "__main__":
     cost = (usage["input_tokens"] / 1_000_000 * PRICE_IN_PER_M
             + usage["output_tokens"] / 1_000_000 * PRICE_OUT_PER_M)
     print(
-        f"\n[usage] input_tokens={usage['input_tokens']} output_tokens={usage['output_tokens']} "
+        f"\n[usage] engine={config['engine']} input_tokens={usage['input_tokens']} "
+        f"output_tokens={usage['output_tokens']} tavily_searches={tavily_searches} "
         f"estimated_cost=${cost:.4f} (estimate)"
     )

@@ -1,6 +1,11 @@
 # Copy this file to config.yaml and edit freely. config.yaml is gitignored;
 # this file is the committed template.
 
+# Which engine builds the front page: pipeline (default - gather/filter/edit,
+# no tools, fixed research) or agent (the original tool-using model loop in
+# agent_loop.py). --engine on the CLI overrides this.
+# engine: pipeline
+
 # How far back to search for new stories.
 lookback_days: 3
 

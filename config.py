@@ -7,8 +7,9 @@ import yaml
 _VALID_COMMENTARY = {"none", "context", "analysis"}
 _TOP_LEVEL_KEYS = {
     "lookback_days", "history_days", "topics", "sites", "title", "tagline",
-    "recipient", "general_news", "general_focus",
+    "recipient", "general_news", "general_focus", "engine",
 }
+_VALID_ENGINES = {"pipeline", "agent"}
 _DEFAULT_GENERAL_FOCUS = (
     "the biggest global stories of the day, plus one or two genuinely "
     "interesting or unexpected stories"
@@ -143,6 +144,13 @@ def load_config(path: str | None = None) -> dict:
     raw.setdefault("general_focus", _DEFAULT_GENERAL_FOCUS)
     if not isinstance(raw["general_focus"], str) or not raw["general_focus"].strip():
         raise ValueError(f"config key 'general_focus' must be a non-empty string, got {raw['general_focus']!r}")
+
+    # Which engine builds the front page: "pipeline" (gather/filter/edit -
+    # no tools, fixed research) or "agent" (the original tool-using model
+    # loop in agent_loop.py). --engine on the CLI overrides this.
+    raw.setdefault("engine", "pipeline")
+    if raw["engine"] not in _VALID_ENGINES:
+        raise ValueError(f"config key 'engine' must be one of {sorted(_VALID_ENGINES)}, got {raw['engine']!r}")
 
     return raw
 

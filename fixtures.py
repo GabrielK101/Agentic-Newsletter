@@ -7,7 +7,7 @@ def fixture_stories(config: dict) -> dict:
     """A front-page digest shaped exactly like parse_digest's output:
     {lead, secondary, sections, ticker, scoreboard, sources, disclosure,
     notes}. Covers a long and a short example, one empty section (the
-    quiet-day case), no ticker, a scoreboard, one deliberately hostile
+    quiet-day case), a ticker and a scoreboard, one deliberately hostile
     item (<script> headline, javascript: url) for escaping/safe_url, a
     headline-only item (empty summary - should be dropped by the summary
     floor), a missing-date item (no "published" at all - shows no date,
@@ -176,8 +176,17 @@ def fixture_stories(config: dict) -> dict:
         },
     ]
 
+    # Two groups, to exercise the multi-panel scoreboard layout.
     scoreboard = [
-        {"label": "Formula 1", "line": "Fixture GP: Driver A won, Driver B second."},
+        {"group": "Formula 1", "label": "Fixture GP", "line": "Driver A · Driver B · Driver C"},
+        {"group": "Formula 1", "label": "Drivers", "line": "Driver A leads Driver B by 98 pts"},
+        {"group": "Premier League", "label": "", "line": "Fixture FC 2-1 Example Town"},
+    ]
+
+    ticker = [
+        {"label": "S&P 500", "value": "6,812.40", "change": "+1.2%", "direction": "up", "session_day": "Fri"},
+        {"label": "Brent", "value": "$93.21", "change": "-0.4%", "direction": "down", "session_day": "Fri"},
+        {"label": "GBP/USD", "value": "1.2650", "change": "0.0%", "direction": "flat", "session_day": "Fri"},
     ]
 
     sources = [
@@ -189,7 +198,7 @@ def fixture_stories(config: dict) -> dict:
         "lead": lead,
         "secondary": secondary,
         "sections": sections,
-        "ticker": [],  # deliberately omitted - no real tool-sourced market data here
+        "ticker": ticker,
         "scoreboard": scoreboard,
         "sources": sources,
         "disclosure": "This digest is produced by an automated agent and may contain errors.",

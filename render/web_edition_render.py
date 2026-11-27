@@ -1,4 +1,5 @@
-"""newsletter_render.py - the HTML/text layout engine for the digest.
+"""web_edition_render.py - the "web edition" HTML/text layout engine for
+the digest's main front page.
 
 ONE adaptive front-page layout, not a choice of styles: masthead -> hero ->
 a grid of up to MAX_CARDS-1 cards (weight-3 stories first, then weight-2,
@@ -14,22 +15,23 @@ _MEDIA_QUERY_CSS) preserves it too.
 """
 import html
 import re
-from datetime import date, datetime
-from urllib.parse import urlparse
-from zoneinfo import ZoneInfo
+from datetime import date
 
-_SERIF = "Georgia, 'Times New Roman', Times, serif"
+from render.summary_text import (
+    SUMMARY_CEILING_BRIEF, SUMMARY_CEILING_HERO, SUMMARY_CEILING_MAJOR,
+    _ACCENT, _CARD_GAP, _MUTED, _SERIF,
+    _follows_html, _kicker_html, _read_more_link, _snippet_note, _tier_of,
+    clamp_summary, safe_url,
+)
+
 _SANS = "-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif"
 _INK = "#1a1a1a"
-_ACCENT = "#8a1f1f"
 _PAPER = "#faf6ec"
-_MUTED = "#6b6456"
 _RULE = "#ece6d8"
 
 _SIDE_PAD = 20   # the one place horizontal page padding is applied
 _GUTTER = 12     # padding on each side of a column rule
 _BAND_GAP = 16   # vertical space after each band (compact, per the redesign)
-_CARD_GAP = 4    # vertical space between a card's own headline/summary/read-more
 _HERO_GAP = 8    # vertical space between the hero's headline/summary/read-more
 
 MAX_CARDS = 9    # hero included - at most 8 more cards in the grid
@@ -38,26 +40,14 @@ CONTENT_WIDTH = 760  # overall canvas; wider than the traditional 600-640px
                      # (Gmail, Apple Mail, Outlook.com, mobile) render
                      # without clipping; older Outlook desktop is the main risk.
 
-# Summary word limits: a floor (below which a summary says too little to
-# be worth keeping - dropped, never padded) and per-tier ceilings (render-
-# time safety net matching what the SYSTEM prompt asks the model for).
-# Enforced first at parse time (agent_loop.py's parse_digest, and
-# digest.py's prepare_front_page so --fixture digests get the same
-# treatment as real model output), then again here at render time.
-SUMMARY_WORD_FLOOR = 8
-SUMMARY_CEILING_HERO = 110
-SUMMARY_CEILING_MAJOR = 70
-SUMMARY_CEILING_STANDARD = 45  # weight 2 - the front-page pipeline doesn't
-                               # currently produce this tier (lead/
-                               # secondary/brief map to HERO/MAJOR/BRIEF
-                               # only); kept for the table's shape below.
-SUMMARY_CEILING_BRIEF = 25
+# weight 2 - the front-page pipeline doesn't currently produce this tier
+# (lead/secondary/brief map to HERO/MAJOR/BRIEF only); kept for the
+# table's shape below.
+SUMMARY_CEILING_STANDARD = 45
 _SUMMARY_LIMITS = {
     "lead": SUMMARY_CEILING_HERO, 3: SUMMARY_CEILING_MAJOR,
     2: SUMMARY_CEILING_STANDARD, 1: SUMMARY_CEILING_BRIEF,
 }
-
-LONDON_TZ = ZoneInfo("Europe/London")
 
 _MEDIA_QUERY_CSS = (
     "@media (max-width:480px){"
@@ -74,163 +64,6 @@ _MEDIA_QUERY_CSS = (
     # kicker) still read as visually distinct, not run together.
     "}"
 )
-
-
-def safe_url(url: str) -> str:
-    """Return the url if it's http(s), else a harmless placeholder."""
-    if isinstance(url, str) and (url.startswith("http://") or url.startswith("https://")):
-        return url
-    return "#"
-
-
-def _parse_published(value) -> date | None:
-    """`value` as an ISO date or datetime string -> a date, defensively -
-    None if missing or unparseable. Never infers a date from anything
-    else (today, a neighbouring story, ...) - no date in means no date
-    shown, not "assume today"."""
-    if not isinstance(value, str) or not value.strip():
-        return None
-    value = value.strip()
-    try:
-        return date.fromisoformat(value[:10])
-    except ValueError:
-        pass
-    try:
-        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
-    except ValueError:
-        return None
-    if parsed.tzinfo is not None:
-        parsed = parsed.astimezone(LONDON_TZ)
-    return parsed.date()
-
-
-def format_relative_date(published, today: date | None = None) -> str:
-    """"Today" / "Yesterday" / "Thu 19 Nov" for `published` (an ISO date
-    or datetime string), relative to `today` (Europe/London's current
-    date if not given) - or "" if `published` is missing or unparseable.
-    Anything older than yesterday gets the explicit weekday+day+month
-    form, so a stale item is never silently indistinguishable from a
-    fresh one."""
-    parsed = _parse_published(published)
-    if parsed is None:
-        return ""
-    if today is None:
-        today = datetime.now(LONDON_TZ).date()
-    delta = (today - parsed).days
-    if delta == 0:
-        return "Today"
-    if delta == 1:
-        return "Yesterday"
-    return f"{parsed.strftime('%a')} {parsed.day} {parsed.strftime('%b')}"
-
-
-def _read_more_link(url: str) -> str:
-    """'Read more at {domain} ->'. Link text is built in code, never taken
-    from the model. Omitted entirely if the url isn't http(s)."""
-    safe = safe_url(url)
-    if safe == "#":
-        return ""
-    domain = urlparse(safe).netloc
-    if domain.startswith("www."):
-        domain = domain[4:]
-    href = html.escape(safe, quote=True)
-    label = html.escape(f"Read more at {domain} →")
-    # Deliberately NOT the same colour/weight as _kicker_html: on mobile a
-    # card's read-more sits directly above the next card's kicker once the
-    # column rule that used to separate them is gone, and two bold accent-
-    # coloured labels back to back read as one blurred line.
-    return (
-        f'<a href="{href}" style="color:{_MUTED};text-decoration:underline;'
-        f'font-size:11px;font-weight:600;">{label}</a>'
-    )
-
-
-def _snippet_note(story: dict, size_px: int = 11) -> str:
-    if story.get("basis") != "snippet":
-        return ""
-    return (
-        f' <span style="color:{_MUTED};font-size:{size_px}px;font-style:italic;">'
-        '(based on a search snippet only)</span>'
-    )
-
-
-def _kicker_text(story: dict) -> str:
-    """Plain escaped kicker text: any combination of "UPDATE", the topic,
-    and a relative date ("TODAY"/"YESTERDAY"/"THU 19 NOV"), joined by
-    " &middot; " - only the parts that actually exist. "" if there's
-    nothing to show."""
-    parts = []
-    if story.get("update_of") is not None:
-        parts.append("UPDATE")
-    topic = html.escape(str(story.get("topic", "")).upper())
-    if topic:
-        parts.append(topic)
-    date_label = format_relative_date(story.get("published"))
-    if date_label:
-        parts.append(html.escape(date_label.upper()))
-    return " &middot; ".join(parts)
-
-
-def _kicker_html(story: dict, size_px: int) -> str:
-    text = _kicker_text(story)
-    if not text:
-        return ""
-    return (
-        f'<div style="font-size:{size_px}px;font-weight:700;letter-spacing:2px;'
-        f'color:{_ACCENT};margin-bottom:{_CARD_GAP}px;">{text}</div>'
-    )
-
-
-def _first_sentence(text: str, limit: int = 140) -> str:
-    """First sentence of text, or the first ~140 chars + an ellipsis if
-    there's no sentence-ending punctuation at all."""
-    match = re.search(r"[.!?](?:\s|$)", text)
-    if match:
-        return text[:match.end()].strip()
-    if len(text) <= limit:
-        return text
-    return text[:limit].rstrip() + "…"
-
-
-def clamp_summary(text: str, max_words: int) -> str:
-    """Cut `text` to at most `max_words` words, preferring to stop at the
-    last sentence boundary within that limit; falls back to a hard cut plus
-    an ellipsis. Render-time only - stored text and the .md stay full."""
-    words = text.split()
-    if len(words) <= max_words:
-        return text
-    truncated = " ".join(words[:max_words])
-    last_boundary = None
-    for m in re.finditer(r"[.!?](?:\s|$)", truncated):
-        last_boundary = m
-    if last_boundary:
-        return truncated[:last_boundary.end()].strip()
-    return truncated.rstrip() + "…"
-
-
-def clean_summary(headline: str, summary: str, ceiling: int) -> str | None:
-    """Clamp `summary` to `ceiling` words, then enforce SUMMARY_WORD_FLOOR:
-    a summary that short says too little to be worth keeping, so the
-    whole item is dropped (None, with a warning naming it by headline) -
-    never padded. Shared between agent_loop.py's parse_digest (real model
-    output) and digest.py's prepare_front_page, so --fixture digests get
-    exactly the same floor/ceiling treatment as a real run."""
-    summary = (summary or "").strip()
-    if not summary:
-        print(f"[dropped: no summary] {headline!r}")
-        return None
-    clamped = clamp_summary(summary, ceiling)
-    if len(clamped.split()) < SUMMARY_WORD_FLOOR:
-        print(f"[dropped: summary under {SUMMARY_WORD_FLOOR} words] {headline!r}")
-        return None
-    return clamped
-
-
-def _tier_of(story: dict) -> int:
-    weight = story.get("weight")
-    if isinstance(weight, bool) or not isinstance(weight, int) or weight not in (1, 2, 3):
-        return 2
-    return weight
 
 
 # --- band-level table wrappers: the one place side padding/gutters live ---
@@ -294,16 +127,32 @@ def _join_sections(sections: list[str]) -> str:
 # --- hero ---
 
 def _hero_content_html(hero: dict) -> str:
-    """The hero's own text HTML: kicker, headline, summary, read-more."""
+    """The hero's own text HTML: kicker, "Follows:" line, headline, dek
+    (its own italic line - never glued onto the body), body (each \\n\\n
+    paragraph its own <p>, so paragraph breaks survive), read-more."""
     headline = html.escape(str(hero.get("headline", "")))
-    summary = html.escape(clamp_summary(str(hero.get("summary", "")), _SUMMARY_LIMITS["lead"]))
+    dek = str(hero.get("dek") or "").strip()
+    body = str(hero.get("body") or hero.get("summary") or "")
+    body = clamp_summary(body, SUMMARY_CEILING_HERO)
+    paragraphs = [p.strip() for p in body.split("\n\n") if p.strip()]
     read_more = _read_more_link(hero.get("url", ""))
+
+    dek_html = (
+        f'<div style="font-family:{_SERIF};font-size:17px;line-height:1.35;font-style:italic;'
+        f'color:#3a3a3a;margin-top:{_HERO_GAP}px;">{html.escape(dek)}</div>'
+        if dek else ""
+    )
+    body_html = "".join(
+        f'<p style="font-family:{_SERIF};font-size:14px;line-height:1.55;color:#2a2a2a;'
+        f'margin:{_HERO_GAP}px 0 0 0;">{html.escape(p)}</p>'
+        for p in paragraphs
+    )
     return (
         _kicker_html(hero, 11)
-        + f'<div style="font-family:{_SERIF};font-size:26px;line-height:1.22;'
+        + _follows_html(hero)
+        + f'<div style="font-family:{_SERIF};font-size:28px;line-height:1.15;'
         f'font-weight:700;color:{_INK};">{headline}</div>'
-        + f'<div style="font-family:{_SERIF};font-size:14px;line-height:1.5;color:#3a3a3a;margin-top:{_HERO_GAP}px;">'
-        + summary + _snippet_note(hero, 12) + '</div>'
+        + dek_html + body_html + _snippet_note(hero, 12)
         + (f'<div style="margin-top:{_HERO_GAP}px;">{read_more}</div>' if read_more else "")
     )
 
@@ -325,6 +174,7 @@ def _grid_card(story: dict, headline_px: int, summary_limit: int) -> str:
     read_more = _read_more_link(story.get("url", ""))
     return (
         _kicker_html(story, 10)
+        + _follows_html(story)
         + f'<div style="font-family:{_SERIF};font-size:{headline_px}px;line-height:1.3;'
         f'font-weight:700;color:{_INK};">{headline}</div>'
         + f'<div style="font-family:{_SERIF};font-size:13px;line-height:1.45;color:#3a3a3a;margin-top:{_CARD_GAP}px;">'
@@ -377,25 +227,28 @@ def _pack_rows(cards: list[dict]) -> tuple[list[list[dict]], list[dict]]:
 # --- brief list ---
 
 def _brief_entry(story: dict) -> str:
-    """Kicker (its own small-caps line), headline, summary, and a "Read
-    more" link underneath - the same structure and sizing pattern as a
-    grid card (_grid_card), just smaller, so every tier reads as one
-    consistent style instead of briefs looking like a cut-down, oddly
-    inline version of the others."""
+    """Kicker (date only - inside a section, the section heading already
+    names the topic), "Follows:" line, then the headline itself as the
+    link (bold, no underline, ink colour - no leading "·", no trailing
+    "→", no separate "Read more" line), then its summary."""
     headline = html.escape(str(story.get("headline", "")))
     summary = html.escape(clamp_summary(str(story.get("summary", "")), SUMMARY_CEILING_BRIEF))
-    read_more = _read_more_link(story.get("url", ""))
+    safe = safe_url(story.get("url", ""))
+    headline_html = (
+        f'<a href="{html.escape(safe, quote=True)}" style="color:{_INK};'
+        f'text-decoration:none;font-weight:700;">{headline}</a>'
+        if safe != "#" else f'<span style="font-weight:700;color:{_INK};">{headline}</span>'
+    )
     return (
         f'<div style="padding:{_CARD_GAP}px 0;">'
-        + _kicker_html(story, 10)
-        + f'<div style="font-family:{_SERIF};font-size:15px;line-height:1.3;'
-        f'font-weight:700;color:{_INK};">{headline}</div>'
+        + _kicker_html(story, 10, show_topic=False)
+        + _follows_html(story)
+        + f'<div style="font-family:{_SERIF};font-size:15px;line-height:1.3;">{headline_html}</div>'
         + (
             f'<div style="font-family:{_SERIF};font-size:13px;line-height:1.4;color:#3a3a3a;'
             f'margin-top:{_CARD_GAP}px;">{summary}</div>'
             if summary else ""
         )
-        + (f'<div style="margin-top:{_CARD_GAP}px;">{read_more}</div>' if read_more else "")
         + '</div>'
     )
 
@@ -527,118 +380,4 @@ def render_text(stories: list[dict]) -> str:
             lines.append(str(story.get("url", "")))
             lines.append("")
 
-    return "\n".join(lines)
-
-
-# --- teaser email: links out to the web edition instead of rendering
-# every story inline. Used (see delivery.py) only when DIGEST_WEB_BASE_URL
-# is set; same table-based/inline-style/serif-stack conventions as
-# render_html above - no web fonts, everything escaped, every href through
-# safe_url.
-
-def _teaser_secondary_html(item: dict, safe_web_url: str) -> str:
-    headline = html.escape(str(item.get("headline", "")))
-    href = html.escape(safe_web_url, quote=True) if safe_web_url != "#" else None
-    headline_html = (
-        f'<a href="{href}" style="color:{_INK};text-decoration:none;font-weight:700;">{headline}</a>'
-        if href else f'<span style="font-weight:700;">{headline}</span>'
-    )
-    return (
-        f'<div style="padding:{_CARD_GAP}px 0;">'
-        + _kicker_html(item, 10)
-        + f'<div style="font-family:{_SERIF};font-size:15px;line-height:1.3;">{headline_html}</div>'
-        + '</div>'
-    )
-
-
-def _teaser_button_html(safe_web_url: str) -> str:
-    href = html.escape(safe_web_url, quote=True) if safe_web_url != "#" else "#"
-    return _band(
-        '<table role="presentation" cellpadding="0" cellspacing="0" style="margin:0 auto;"><tr>'
-        f'<td style="background:{_ACCENT};border-radius:4px;">'
-        f'<a href="{href}" style="display:inline-block;padding:12px 28px;font-family:{_SANS};'
-        f'font-size:13px;font-weight:700;letter-spacing:.04em;color:#ffffff;text-decoration:none;'
-        f'text-transform:uppercase;">Read today&#x27;s front page &#8594;</a>'
-        '</td></tr></table>'
-    )
-
-
-def render_teaser_html(front_page: dict, title: str = "The Daily Digest",
-                        tagline: str | None = None, web_url: str = "") -> str:
-    """A short email that links out to the web edition instead of
-    rendering every story inline: masthead, the lead's headline + dek,
-    secondary headlines, and a button to `web_url`. Used when
-    DIGEST_WEB_BASE_URL is set - otherwise render_html is used unchanged."""
-    lead = front_page.get("lead")
-    secondary = front_page.get("secondary") or []
-    sections = front_page.get("sections") or []
-    count = (1 if lead else 0) + len(secondary) + sum(len(s.get("briefs") or []) for s in sections)
-
-    safe_web_url = safe_url(web_url)
-
-    lead_html = ""
-    if lead:
-        headline = html.escape(str(lead.get("headline", "")))
-        dek = html.escape(str(lead.get("dek", "")))
-        href = html.escape(safe_web_url, quote=True) if safe_web_url != "#" else None
-        headline_html = (
-            f'<a href="{href}" style="color:{_INK};text-decoration:none;">{headline}</a>' if href else headline
-        )
-        lead_html = _band(
-            _kicker_html(lead, 11)
-            + f'<div style="font-family:{_SERIF};font-size:26px;line-height:1.22;font-weight:700;">'
-            f'{headline_html}</div>'
-            + (
-                f'<div style="font-family:{_SERIF};font-size:14px;font-style:italic;'
-                f'color:#3a3a3a;margin-top:{_HERO_GAP}px;">{dek}</div>'
-                if dek else ""
-            )
-        )
-
-    secondary_html = ""
-    if secondary:
-        secondary_html = _band("".join(_teaser_secondary_html(s, safe_web_url) for s in secondary))
-
-    body = _join_sections([
-        _masthead_html(count, title, tagline),
-        lead_html,
-        secondary_html,
-        _teaser_button_html(safe_web_url),
-        footer_band(),
-    ])
-
-    return (
-        "<!doctype html>"
-        '<html><head><meta charset="utf-8">'
-        '<meta name="viewport" content="width=device-width, initial-scale=1">'
-        f"<style>{_MEDIA_QUERY_CSS}</style>"
-        '</head><body style="margin:0;padding:0;">'
-        f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" bgcolor="{_PAPER}" '
-        f'style="width:100%;background:{_PAPER};border-collapse:collapse;"><tr><td align="center">'
-        '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" '
-        f'style="width:100%;max-width:{CONTENT_WIDTH}px;"><tr><td style="padding:24px 0;font-family:{_SANS};color:{_INK};">'
-        + body +
-        '</td></tr></table>'
-        '</td></tr></table>'
-        '</body></html>'
-    )
-
-
-def render_teaser_text(front_page: dict, title: str = "The Daily Digest", web_url: str = "") -> str:
-    """Plain-text alternative for render_teaser_html."""
-    lead = front_page.get("lead")
-    secondary = front_page.get("secondary") or []
-
-    lines = [str(title), ""]
-    if lead:
-        lines.append(str(lead.get("headline", "")))
-        if lead.get("dek"):
-            lines.append(str(lead["dek"]))
-        lines.append("")
-    if secondary:
-        lines.append("Also today:")
-        for item in secondary:
-            lines.append(f"- {item.get('headline', '')}")
-        lines.append("")
-    lines.append(f"Read today's front page: {web_url}")
     return "\n".join(lines)

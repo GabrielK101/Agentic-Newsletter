@@ -1,6 +1,11 @@
 # Copy this file to config.yaml and edit freely. config.yaml is gitignored;
 # this file is the committed template.
 
+# Which engine builds the front page: pipeline (default - gather/filter/edit,
+# no tools, fixed research) or agent (the original tool-using model loop in
+# agent_loop.py). --engine on the CLI overrides this.
+# engine: pipeline
+
 # How far back to search for new stories.
 lookback_days: 3
 
@@ -17,6 +22,16 @@ topics:
       Replace this with what you actually want covered for this topic: the
       angle, the level of depth, and what to skip.
     commentary: none
+    # Optional: get the ticker/scoreboard from code instead of the model,
+    # for this topic. ticker instruments: sp500, nasdaq, dow, ftse, brent,
+    # gbpusd. sports: f1, premier_league (the latter needs FOOTBALL_DATA_API_KEY).
+    # data:
+    #   ticker: [sp500, ftse]
+    #   sports: [f1]
+    # Optional, unrelated to the above: tag this topic as markets or sport
+    # coverage so the gather/filter pipeline (--gather-only) adds a dedicated
+    # closing-levels (markets) or results-and-standings (sport) query for it.
+    # data_section: markets
 
 sites:
   - https://example.com

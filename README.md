@@ -26,7 +26,10 @@ Fill in `ANTHROPIC_API_KEY` and `TAVILY_API_KEY` in `.env`, and edit `config.yam
   - Auth is Application Default Credentials only - no key files. On GCP compute this is automatic; locally, `gcloud auth application-default login`.
 - `DIGEST_DELIVERY` - `local` (default: print + files under `digests/`) or `email` (requires `GMAIL_USER`, `GMAIL_APP_PASSWORD`, and a recipient - see `DIGEST_TO` below).
 - `DIGEST_TO` - who the email goes to. Overridable per-config with `recipient` in `config.yaml` (`DIGEST_TO` is the fallback if that's unset).
-- `DIGEST_WEB_BASE_URL` - optional. If set, the `email` backend sends a short teaser (masthead, lead headline + dek, secondary headlines, a button to the web edition) that links to `{DIGEST_WEB_BASE_URL}/{web edition filename}`, instead of the full layout. Unset by default - the full email is sent unchanged.
+- `DIGEST_EMAIL_MODE` - `full` (default: every story inline, mobile-first - see `email_render.py`) or `teaser` (a short email with just the lead/secondary headlines and a button to the web edition).
+- `DIGEST_WEB_BUCKET` - optional, a GCS bucket the code only ever uploads to, never changes the ACLs/IAM of - it must already grant public read (e.g. `allUsers`:`roles/storage.legacyObjectReader`) outside this code. When set, each run publishes the web edition to `gs://<bucket>/editions/<date>-<random 16-char token>.html` and links `https://storage.googleapis.com/<bucket>/...` in the email (both layout modes). A missing config or a failed publish just means the email sends without that link - never fatal. The rendered page is checked for an email address, the recipient, or `notes` text before it's ever uploaded; if any appear, publishing is skipped.
+  - `DIGEST_WEB_LATEST_TOKEN` - optional, a fixed token; when set, each run also publishes a stable `gs://<bucket>/editions/latest-<token>.html` (same content as that day's dated edition).
+- `FOOTBALL_DATA_API_KEY` - optional. Enables `sports_data.get_football`, used when a topic's `data.sports` includes `premier_league` (see `config.yaml` below). Unset: that part of the scoreboard is just skipped.
 
 ## Running
 
@@ -54,10 +57,13 @@ python digest.py --check             # validate config/env only - no model, tool
 - `db.py` - SQLite storage for past stories, used to dedupe and to report follow-ups.
 - `storage.py` - syncs the DB file to/from a remote backend before/after a run (currently local-only; `s3`/`gcs` are stubs).
 - `delivery.py` - delivery mechanics: saves files, builds and sends the email.
-- `newsletter_render.py` - the HTML/text layout engine that turns stories into the rendered email.
-- `webpage.py` - the web edition: one self-contained HTML page (inline CSS, Google Fonts links) built from the same front-page shape as the email, saved alongside it under `digests/` (`DIGEST_DELIVERY=local` only).
+- `newsletter_render.py` - shared rendering logic (safe_url, clamp_summary, format_relative_date, kicker/"Follows:" text) plus the older table-based full/teaser email layouts - kept, but no longer the default email (see `email_render.py`).
+- `email_render.py` - the default email: mobile-first, single-column by default, with side-by-side sections/ticker as a progressive enhancement (the "fluid hybrid" technique) that degrades safely in any client, including the Gmail app with no `<style>` support.
+- `webpage.py` - the web edition: one self-contained HTML page (inline CSS, Google Fonts links) built from the same front-page shape as the email, saved alongside it under `digests/` (`DIGEST_DELIVERY=local` only) and optionally published publicly (see `DIGEST_WEB_BUCKET` above).
+- `market_data.py` - closing-session market figures (via `yfinance`), fetched by code so the ticker is reliable every day - see a topic's `data.ticker` in `config.yaml`.
+- `sports_data.py` - finished-event sport results (F1 via the Jolpica API; football via football-data.org, optional) - see a topic's `data.sports` in `config.yaml`.
 - `design/` - a design-tool mockup of the web edition's look - reference only, not runtime code.
-- `tests/` - standalone test scripts, each runnable directly (no test runner required): `test_db.py`.
+- `tests/` - `test_db.py` (standalone script, run directly) plus pytest suites: `test_email_render.py`, `test_data_modules.py`, `test_fixture_end_to_end.py`.
 - `config.prod.yaml` - committed, non-secret production config baked into the Docker image.
 - `Dockerfile` / `.dockerignore` - container image for running the job on a schedule. Not deployed anywhere yet.
 
@@ -74,9 +80,10 @@ The image runs as a non-root user, uses `config.prod.yaml` (`DIGEST_CONFIG=confi
 
 ```
 python tests/test_db.py
+pytest -q
 ```
 
-Both are self-contained (no network access, no real `digest.db` touched) and print `all tests passed` / the standard `unittest` summary on success.
+`test_db.py` is self-contained (no network access, no real `digest.db` touched) and prints `all tests passed`. The pytest suites mock every external call (yfinance, Jolpica, football-data.org) - no network access either.
 
 ## Roadmap
 

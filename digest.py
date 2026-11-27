@@ -2,30 +2,47 @@
 
 Parses CLI flags, wires together the agent loop (agent_loop.py), fixtures
 (fixtures.py), the database and delivery, then renders and ships the digest.
+The front-page assembly logic lives in front_page.py and the markdown
+renderer in markdown_render.py; this file just wires them together.
 """
-import json
 import os
 import sys
 from datetime import date, datetime, timedelta
-from urllib.parse import urlparse
 
 from dotenv import load_dotenv
 
-import tools  # noqa: F401  -- importing this file runs the @tool decorators that fill REGISTRY
-from agent_loop import MODEL, MAX_TURNS, MAX_TOKENS, SYSTEM, build_request, run_agent, parse_digest
+import sources.tools  # noqa: F401  -- importing this file runs the @tool decorators that fill REGISTRY
+from pipeline.agent_loop import MODEL, MAX_TURNS, MAX_TOKENS, SYSTEM, build_request, run_agent, parse_digest
 from fixtures import fixture_stories
 from config import load_config
-from db import init_db, recent_stories, save_story, seen_url
+from db import init_db, recent_stories, save_story
 from delivery import deliver
-from newsletter_render import SUMMARY_CEILING_BRIEF, SUMMARY_CEILING_HERO, SUMMARY_CEILING_MAJOR, clean_summary
+from pipeline.front_page import (
+    _code_ticker_and_scoreboard, _lead_summary, _resolve_follows,
+    _try_parse_json_reply, build_render_stories, prepare_front_page,
+)
+from pipeline.markdown_render import render_digest
 from storage import sync_down, sync_up, upload_run_archive
 
 load_dotenv()
+
+def _flag_value(name: str) -> str | None:
+    """The value after a space-separated CLI flag, e.g. "--engine pipeline"
+    -> "pipeline" - or None if the flag wasn't given."""
+    args = sys.argv[1:]
+    if name in args:
+        idx = args.index(name)
+        if idx + 1 < len(args):
+            return args[idx + 1]
+    return None
+
 
 DRY_RUN = "--dry-run" in sys.argv[1:]
 SEND = "--send" in sys.argv[1:]
 FIXTURE = "--fixture" in sys.argv[1:]  # skip the model/tools; use a canned front page
 CHECK = "--check" in sys.argv[1:]  # validate config/env only; no model, tool, or email calls
+GATHER_ONLY = "--gather-only" in sys.argv[1:]  # run gather+filter only; no model, DB write, or email
+ENGINE_OVERRIDE = _flag_value("--engine")  # "pipeline" | "agent" - overrides config's "engine" key
 
 if FIXTURE:
     DRY_RUN = True  # fixture stories must never be able to reach the DB
@@ -36,269 +53,6 @@ if SEND:
 # For the end-of-run cost estimate. Update if pricing changes.
 PRICE_IN_PER_M = 3.0
 PRICE_OUT_PER_M = 15.0
-
-
-def _lead_summary(lead: dict) -> str:
-    """The lead's dek + body joined into one block - used both as the
-    HTML/text renderer's "summary" for the hero card and as what gets
-    stored for future "Already told" context. Falls back to "summary"
-    for a promoted secondary/brief (see prepare_front_page), which has
-    that field instead of dek/body."""
-    joined = " ".join(part for part in (lead.get("dek", ""), lead.get("body", "")) if part).strip()
-    return joined or str(lead.get("summary", "")).strip()
-
-
-def _is_fresh_and_new(item: dict, cutoff: str) -> bool:
-    """A story is usable only if it isn't older than the lookback window
-    (or carries no date at all) and its url hasn't already been told."""
-    published = item.get("published")
-    if published and published < cutoff:
-        return False
-    return bool(item.get("url")) and not seen_url(item["url"])
-
-
-# Low-trust domains: social platforms, not primary reporting - a story
-# citing one of these as its only source is dropped outright, never
-# rendered. Matches the domain itself and any subdomain (e.g. m.facebook.com).
-DENYLIST_DOMAINS = frozenset({
-    "facebook.com", "x.com", "twitter.com", "instagram.com",
-    "tiktok.com", "reddit.com", "youtube.com",
-})
-
-
-def _is_denylisted(url: str) -> bool:
-    host = urlparse(url or "").netloc.lower()
-    if host.startswith("www."):
-        host = host[4:]
-    return host in DENYLIST_DOMAINS or any(host.endswith("." + d) for d in DENYLIST_DOMAINS)
-
-
-def _passes_domain_check(item: dict) -> bool:
-    """False (drop the item) if its url is on DENYLIST_DOMAINS - applies
-    to every story (lead, secondary, brief)."""
-    url = item.get("url", "")
-    if _is_denylisted(url):
-        print(f"[dropped: low-trust domain] {item.get('headline', '')!r} ({url})")
-        return False
-    return True
-
-
-def _passes_basis_check(item: dict) -> bool:
-    """False (drop the item) if "basis" is "snippet" - the lead and every
-    secondary (weight-3) story must be based on the fetched article, never
-    just a headline or search snippet. Never downgrades; drops outright.
-    Briefs don't carry a "basis" field, so this is a no-op for them."""
-    if item.get("basis") == "snippet":
-        print(f"[dropped: snippet basis not allowed for lead/secondary] {item.get('headline', '')!r}")
-        return False
-    return True
-
-
-def _try_parse_json_reply(text: str):
-    """The model's raw JSON reply, parsed - or the raw text itself if it
-    doesn't parse, so a malformed reply is still captured in the run
-    archive for debugging why, not just silently dropped."""
-    stripped = text.strip()
-    if stripped.startswith("```"):
-        stripped = stripped.strip("`").removeprefix("json").strip()
-    start, end = stripped.find("{"), stripped.rfind("}")
-    if start != -1 and end != -1 and end > start:
-        try:
-            return json.loads(stripped[start:end + 1])
-        except json.JSONDecodeError:
-            pass
-    return text
-
-
-def _passes_summary_floor(item: dict, field: str, ceiling: int) -> bool:
-    """Clamp item[field] to `ceiling` words and enforce the floor
-    (clean_summary), mutating item[field] in place with the clamped
-    text. False (drop the item) if it's empty or under the floor -
-    applied here too (not just agent_loop.py's parse_digest) so a
-    --fixture digest gets exactly the same treatment as real model
-    output, including the dropped-item warning."""
-    cleaned = clean_summary(item.get("headline", ""), item.get(field, ""), ceiling)
-    if cleaned is None:
-        return False
-    item[field] = cleaned
-    return True
-
-
-def _normalize_promoted_lead(item: dict) -> dict:
-    """A promoted secondary/brief item (see prepare_front_page) has
-    "summary", not "dek"/"body" - give it the shape every lead consumer
-    expects (_lead_summary, render_digest, webpage.py's lead block) so it
-    renders exactly like a real lead, just without a dek."""
-    if "body" in item or "dek" in item:
-        return item
-    return {**item, "dek": "", "body": item.get("summary", "")}
-
-
-def prepare_front_page(digest: dict, cutoff: str) -> tuple[dict | None, list[dict], list[dict]]:
-    """Apply the lookback-days cutoff, the already-seen-url check, the
-    low-trust-domain denylist, the article-basis requirement (lead and
-    secondary only), and the summary floor/ceiling to every item BEFORE
-    it can appear in the digest. The lead must survive all of these; if
-    it doesn't, the first surviving secondary item - or, failing that,
-    the first surviving brief - is promoted to lead instead. The lead is
-    never allowed to be a stale, already-told, low-trust, snippet-basis,
-    or under-floor-summary story."""
-    lead = digest.get("lead")
-    secondary = [s for s in digest.get("secondary", []) if _is_fresh_and_new(s, cutoff)]
-    secondary = [s for s in secondary if _passes_domain_check(s)]
-    secondary = [s for s in secondary if _passes_basis_check(s)]
-    secondary = [s for s in secondary if _passes_summary_floor(s, "summary", SUMMARY_CEILING_MAJOR)]
-
-    sections = []
-    for section in digest.get("sections", []):
-        briefs = [b for b in section.get("briefs", []) if _is_fresh_and_new(b, cutoff)]
-        briefs = [b for b in briefs if _passes_domain_check(b)]
-        briefs = [b for b in briefs if _passes_summary_floor(b, "summary", SUMMARY_CEILING_BRIEF)]
-        sections.append({"name": section["name"], "briefs": briefs})
-
-    if lead is not None and (
-        not _is_fresh_and_new(lead, cutoff)
-        or not _passes_domain_check(lead)
-        or not _passes_basis_check(lead)
-        or not _passes_summary_floor(lead, "body", SUMMARY_CEILING_HERO)
-    ):
-        lead = None
-        if secondary:
-            lead, secondary = _normalize_promoted_lead(secondary[0]), secondary[1:]
-        else:
-            for section in sections:
-                if section["briefs"]:
-                    lead, section["briefs"] = _normalize_promoted_lead(section["briefs"][0]), section["briefs"][1:]
-                    break
-
-    return lead, secondary, sections
-
-
-def build_render_stories(lead: dict | None, secondary: list[dict], sections: list[dict]) -> list[dict]:
-    """Flatten the front-page shape into the flat list the existing HTML/
-    text renderer expects: lead -> HERO (hero selection keys off
-    "lead": True, not weight), secondary -> MAJOR (weight 3), section
-    briefs -> BRIEF (weight 1)."""
-    stories = []
-    if lead is not None:
-        stories.append({
-            "topic": lead.get("topic", ""),
-            "headline": lead["headline"],
-            "summary": _lead_summary(lead),
-            "url": lead["url"],
-            "published": lead.get("published"),
-            "update_of": lead.get("update_of"),
-            "lead": True,
-            "weight": 3,
-        })
-    for item in secondary:
-        stories.append({
-            "topic": item.get("topic", ""),
-            "headline": item["headline"],
-            "summary": item.get("summary", ""),
-            "url": item["url"],
-            "published": item.get("published"),
-            "update_of": item.get("update_of"),
-            "lead": False,
-            "weight": 3,
-        })
-    for section in sections:
-        for brief in section["briefs"]:
-            stories.append({
-                "topic": section["name"],
-                "headline": brief["headline"],
-                "summary": brief.get("summary", ""),
-                "url": brief["url"],
-                "published": brief.get("published"),
-                "update_of": brief.get("update_of"),
-                "lead": False,
-                "weight": 1,
-            })
-    return stories
-
-
-def render_digest(lead: dict | None, secondary: list[dict], sections: list[dict],
-                   ticker: list[dict], scoreboard: list[dict], sources: list[dict],
-                   disclosure: str | None, history: list[dict]) -> str:
-    """Build the front page as markdown: lead, then secondary stories,
-    then each section's briefs, then markets/scoreboard/sources/disclosure
-    if present."""
-    history_by_id = {h["id"]: h for h in history}
-
-    def _update_line(item: dict) -> str | None:
-        update_of = item.get("update_of")
-        if update_of is None:
-            return None
-        prior = history_by_id.get(update_of)
-        return f"(follows: {prior['headline']})" if prior else None
-
-    lines = []
-
-    if lead is not None:
-        lines.append(f"# {lead['headline']}")
-        if lead.get("dek"):
-            lines.append(f"*{lead['dek']}*")
-        update_line = _update_line(lead)
-        if update_line:
-            lines.append(update_line)
-        if lead.get("body"):
-            lines.append(lead["body"])
-        if lead.get("sources"):
-            lines.append(f"Sources: {', '.join(lead['sources'])}")
-        lines.append(lead["url"])
-        lines.append("")
-
-    if secondary:
-        lines.append("## Also today\n")
-        for item in secondary:
-            lines.append(f"**{item['headline']}**")
-            update_line = _update_line(item)
-            if update_line:
-                lines.append(update_line)
-            if item.get("summary"):
-                lines.append(item["summary"])
-            lines.append(item["url"])
-            lines.append("")
-
-    for section in sections:
-        if not section["briefs"]:
-            continue
-        lines.append(f"## {section['name']}\n")
-        for brief in section["briefs"]:
-            lines.append(f"**{brief['headline']}**")
-            update_line = _update_line(brief)
-            if update_line:
-                lines.append(update_line)
-            if brief.get("summary"):
-                lines.append(brief["summary"])
-            lines.append(brief["url"])
-            lines.append("")
-
-    if ticker:
-        lines.append("## Markets\n")
-        arrows = {"up": "^", "down": "v", "flat": "-"}
-        for row in ticker:
-            change = f" {row['change']}" if row.get("change") else ""
-            arrow = arrows.get(row.get("direction"), "")
-            lines.append(f"- {row['label']}: {row['value']}{change} {arrow}".rstrip())
-        lines.append("")
-
-    if scoreboard:
-        lines.append("## Scoreboard\n")
-        for row in scoreboard:
-            lines.append(f"- {row['label']}: {row['line']}")
-        lines.append("")
-
-    if sources:
-        lines.append("## Sources\n")
-        for src in sources:
-            lines.append(f"- {src['name']}" + (f" ({src['url']})" if src.get("url") else ""))
-        lines.append("")
-
-    if disclosure:
-        lines.append(f"*{disclosure}*")
-
-    return "\n".join(lines)
 
 
 def run_check() -> int:
@@ -337,6 +91,14 @@ def run_check() -> int:
         if not present:
             ok = False
 
+    # Optional env vars: informational only, never fail the check -
+    # each gates a best-effort feature that degrades gracefully if unset
+    # (football scores are simply skipped; the web edition just doesn't
+    # get published/linked).
+    for name in ("FOOTBALL_DATA_API_KEY", "DIGEST_WEB_BUCKET"):
+        present = bool(os.environ.get(name))
+        print(f"  {'set    ' if present else 'unset  '} - {name} (optional)")
+
     if storage_backend == "gcs" and os.environ.get("DIGEST_GCS_BUCKET"):
         print("[check] GCS bucket:")
         try:
@@ -362,11 +124,107 @@ def run_check() -> int:
     return 0 if ok else 1
 
 
+def _print_candidate_table(items: list[dict]) -> None:
+    headers = ["id", "section", "domain", "published", "cluster_size", "has_article", "title"]
+    rows = []
+    for item in items:
+        title = str(item.get("title", ""))
+        if len(title) > 70:
+            title = title[:69] + "…"
+        rows.append([str(item.get(h, "")) for h in headers[:-1]] + [title])
+
+    widths = [max(len(h), *(len(r[i]) for r in rows)) if rows else len(h) for i, h in enumerate(headers)]
+
+    def _row(cells):
+        return " | ".join(cell.ljust(w) for cell, w in zip(cells, widths))
+
+    print(_row(headers))
+    print("-+-".join("-" * w for w in widths))
+    for r in rows:
+        print(_row(r))
+
+
+def _run_gather_and_filter(config: dict) -> tuple[list[dict], int]:
+    """The gather+filter funnel shared by --gather-only and the real
+    pipeline engine: build queries, search Tavily, read feeds, then
+    denylist/stale/seen/dedupe/cluster/shortlist/fetch, printing a count
+    at each stage. Returns (final candidates, number of Tavily searches
+    run - one per query)."""
+    from pipeline.gather import build_queries, search_all, gather_feeds, assign_ids
+    from pipeline.filter import (
+        drop_denylisted, drop_stale, drop_seen, dedupe_by_url, cluster, shortlist, fetch_top,
+        require_articles_for_data,
+    )
+
+    queries = build_queries(config, datetime.now())
+    data_query_count = sum(1 for q in queries if q["section"] == "data")
+    print(f"[gather] {len(queries)} queries ({data_query_count} data)")
+
+    search_results = search_all(queries, config["lookback_days"])
+    feed_results = gather_feeds(config["sites"], config["lookback_days"])
+    candidates = assign_ids(search_results + feed_results)
+    print(f"[gather] {len(candidates)} raw results ({len(search_results)} search, {len(feed_results)} feed)")
+
+    after_denylist = drop_denylisted(candidates)
+    print(f"[filter] {len(after_denylist)} after denylist (dropped {len(candidates) - len(after_denylist)})")
+
+    after_stale = drop_stale(after_denylist, config["lookback_days"])
+    print(f"[filter] {len(after_stale)} after stale filter (dropped {len(after_denylist) - len(after_stale)})")
+
+    after_seen = drop_seen(after_stale)
+    print(f"[filter] {len(after_seen)} after seen filter (dropped {len(after_stale) - len(after_seen)})")
+
+    after_dedupe = dedupe_by_url(after_seen)
+    print(f"[filter] {len(after_dedupe)} after url dedupe (dropped {len(after_seen) - len(after_dedupe)})")
+
+    clustered = cluster(after_dedupe)
+    print(f"[filter] {len(clustered)} after clustering ({len(after_dedupe)} candidates)")
+
+    shortlisted = shortlist(clustered)
+    print(f"[filter] {len(shortlisted)} shortlisted")
+
+    fetched = fetch_top(shortlisted)
+    attempted = [f for f in fetched if f["has_article"] is not None]
+    ok_count = sum(1 for f in attempted if f["has_article"])
+    print(f"[filter] fetched {ok_count} OK / {len(attempted) - ok_count} failed ({len(attempted)} attempted)")
+
+    complete = require_articles_for_data(fetched)
+    print(f"[filter] {len(complete)} after requiring articles for data items (dropped {len(fetched) - len(complete)})")
+
+    return complete, len(queries)
+
+
+def run_gather_only(config: dict) -> list[dict]:
+    """--gather-only: run the fixed (non-agentic) gather + filter pipeline
+    and print counts at each stage plus the final shortlist as a table.
+    Never calls the model, never sends email, never writes the DB (only
+    drop_seen *reads* it)."""
+    complete, _ = _run_gather_and_filter(config)
+    print()
+    _print_candidate_table(complete)
+
+    if os.environ.get("DIGEST_ARCHIVE", "").lower() == "true":
+        timestamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
+        upload_run_archive(f"{timestamp}-gather", {"timestamp": timestamp, "candidates": complete})
+
+    return complete
+
+
 if __name__ == "__main__":
     if CHECK:
         sys.exit(run_check())
 
     config = load_config()
+    if ENGINE_OVERRIDE is not None:
+        if ENGINE_OVERRIDE not in ("pipeline", "agent"):
+            print(f"[error] --engine must be 'pipeline' or 'agent', got {ENGINE_OVERRIDE!r}")
+            sys.exit(1)
+        config["engine"] = ENGINE_OVERRIDE
+
+    if GATHER_ONLY:
+        init_db()  # drop_seen reads the DB; never written here
+        run_gather_only(config)
+        sys.exit(0)
 
     for topic in config["topics"]:
         if topic["commentary"] != "none":
@@ -380,15 +238,19 @@ if __name__ == "__main__":
     init_db()
     history = recent_stories(config["history_days"])
 
+    tavily_searches = 0
+
     if FIXTURE:
         print("[fixture] skipping the model and all tools; using a canned front-page digest.")
         digest = fixture_stories(config)
         usage = {"input_tokens": 0, "output_tokens": 0}
-    else:
+
+    elif config["engine"] == "agent":
         raw_text, hit_max_turns, usage, tool_log = run_agent(config, history)
         if hit_max_turns:
             print(raw_text)
             sys.exit(1)
+        tavily_searches = sum(1 for t in tool_log if t["tool"] == "search_web")
 
         # Archived before parsing, so a run that fails to parse is still
         # captured for debugging why. No-op unless gcs + DIGEST_ARCHIVE=true.
@@ -407,8 +269,48 @@ if __name__ == "__main__":
             print(raw_text)
             sys.exit(1)
 
+        code_ticker, code_scoreboard = _code_ticker_and_scoreboard(config)
+        if code_ticker:
+            digest["ticker"] = code_ticker
+        if code_scoreboard:
+            digest["scoreboard"] = code_scoreboard
+
+    else:  # engine == "pipeline"
+        from pipeline.edit import run_edit_with_repair
+
+        candidates, tavily_searches = _run_gather_and_filter(config)
+
+        raw_text, usage, digest = run_edit_with_repair(config, history, candidates)
+
+        # Archived before the None check, same reasoning as the agent engine:
+        # a reply that fails to parse (even after repair) is still captured
+        # for debugging why. No-op unless gcs + DIGEST_ARCHIVE=true.
+        run_timestamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
+        upload_run_archive(run_timestamp, {
+            "timestamp": run_timestamp,
+            "candidates": candidates,
+            "final_json": _try_parse_json_reply(raw_text),
+        })
+
+        if digest is None:
+            print(
+                "[error] edit: the model's final reply did not validate as a front page "
+                "(needs at least a usable \"lead\" citing a real candidate id), and the "
+                "one repair retry also failed. Raw reply follows:"
+            )
+            print(raw_text)
+            sys.exit(1)
+
     cutoff = (date.today() - timedelta(days=config["lookback_days"])).isoformat()
-    lead, secondary, sections = prepare_front_page(digest, cutoff)
+    lead, secondary, sections = prepare_front_page(digest, cutoff, config)
+
+    history_by_id = {h["id"]: h for h in history}
+    if lead is not None:
+        _resolve_follows([lead], history_by_id)
+    _resolve_follows(secondary, history_by_id)
+    for section in sections:
+        _resolve_follows(section["briefs"], history_by_id)
+
     stories = build_render_stories(lead, secondary, sections)
 
     # Deliver BEFORE persisting. If delivery fails (send() exits non-zero
@@ -458,6 +360,7 @@ if __name__ == "__main__":
     cost = (usage["input_tokens"] / 1_000_000 * PRICE_IN_PER_M
             + usage["output_tokens"] / 1_000_000 * PRICE_OUT_PER_M)
     print(
-        f"\n[usage] input_tokens={usage['input_tokens']} output_tokens={usage['output_tokens']} "
+        f"\n[usage] engine={config['engine']} input_tokens={usage['input_tokens']} "
+        f"output_tokens={usage['output_tokens']} tavily_searches={tavily_searches} "
         f"estimated_cost=${cost:.4f} (estimate)"
     )

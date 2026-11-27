@@ -5,18 +5,15 @@ print to stdout and write dated files under digests/ (including a
 webpage.py web edition, alongside the email-style .md/.json/.html). "email"
 additionally sends via Gmail SMTP, using stdlib only.
 
-The email HTML side is ONE adaptive front-page layout, not a choice of
-styles: masthead -> hero -> a grid of up to MAX_CARDS-1 cards (weight-3
-stories first, then weight-2, packed into rows of 3 that never leave a
-lone card) -> a 2-column brief list for everything else -> a footer. Every
-band is a full-width table so columns inside it always end together, and a
-thin rule separates each major section. The model never chooses layout -
-it only supplies "lead" and "weight"; everything else here is deterministic.
-
-If env DIGEST_WEB_BASE_URL is set, the email backend sends a short teaser
-instead (masthead, lead headline + dek, secondary headlines, a button to
-the web edition) rather than the full layout - see render_teaser_html in
-newsletter_render.py.
+The email itself defaults to email_render.render_email_html - the mobile-
+first, single-column-by-default layout (see that module). Set
+DIGEST_EMAIL_MODE=teaser to send the older short teaser instead (masthead,
+lead headline + dek, secondary headlines, a button to the web edition) -
+see newsletter_render.render_teaser_html. Either way, when DIGEST_WEB_BUCKET
+is set the web edition is published (storage.publish_public_edition)
+BEFORE the email is built, and its public url is linked in the email; if
+publishing isn't configured or fails, the email still sends, just without
+that link - a failed publish must never block delivery.
 """
 import json
 import os
@@ -29,10 +26,13 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 import storage
-from newsletter_render import render_html, render_teaser_html, render_teaser_text, render_text
-from webpage import render_web
+from render.email_render import render_email_html, render_email_text
+from render.newsletter_render import render_html, render_teaser_html, render_teaser_text, render_text
+from render.webpage import render_web
 
 load_dotenv()
+
+_SUBJECT_MAX_CHARS = 78
 
 
 def deliver(markdown: str, stories: list[dict], title: str = "The Daily Digest",
@@ -42,9 +42,8 @@ def deliver(markdown: str, stories: list[dict], title: str = "The Daily Digest",
     backend only) falls back to env DIGEST_TO if not given. `front_page`
     is the same already-filtered front-page shape passed to the email
     layout - when given, a web edition is also written to digests/
-    alongside the usual .md/.json/.html files (and, email backend only,
-    used for a teaser email instead of the full layout when
-    DIGEST_WEB_BASE_URL is set - see _deliver_email)."""
+    alongside the usual .md/.json/.html files, and (email backend only)
+    is what the email itself is built from."""
     backend = os.environ.get("DIGEST_DELIVERY", "local")
     if backend == "local":
         _deliver_local(markdown, stories, title, tagline, front_page)
@@ -67,11 +66,12 @@ def _unique_stem(out_dir: Path, base: str) -> str:
 
 
 def _save_files(markdown: str, stories: list[dict], title: str, tagline: str | None,
-                 front_page: dict | None = None) -> tuple[Path, Path, Path, str, Path | None]:
+                 front_page: dict | None = None) -> tuple[Path, Path, Path, str, Path | None, str | None]:
     """Write the .md/.json/.html files under digests/, plus a .web.html
     web edition (same stem) when `front_page` is given. Returns their
-    paths and the rendered email HTML, so a failed send still leaves the
-    files in place."""
+    paths, the rendered archival email HTML, the web path, and the web
+    edition's own HTML (so a caller publishing it publicly doesn't have
+    to re-render it) - a failed send still leaves the files in place."""
     out_dir = Path("digests")
     out_dir.mkdir(exist_ok=True)
     stem = _unique_stem(out_dir, datetime.now().strftime("%Y-%m-%d_%H%M%S"))
@@ -86,25 +86,43 @@ def _save_files(markdown: str, stories: list[dict], title: str, tagline: str | N
     html_path.write_text(html_content, encoding="utf-8")
 
     web_path = None
+    web_html = None
     if front_page is not None:
         web_path = out_dir / f"{stem}.web.html"
         web_html = render_web(front_page, title=title, tagline=tagline)
         web_path.write_text(web_html, encoding="utf-8")
         storage.upload_web(web_path.name, web_html)  # no-op unless gcs + DIGEST_ARCHIVE=true
 
-    return md_path, json_path, html_path, html_content, web_path
+    return md_path, json_path, html_path, html_content, web_path, web_html
 
 
 def _deliver_local(markdown: str, stories: list[dict], title: str, tagline: str | None,
                     front_page: dict | None = None) -> None:
     print(markdown)
 
-    md_path, json_path, html_path, _, web_path = _save_files(markdown, stories, title, tagline, front_page)
+    md_path, json_path, html_path, _, web_path, _ = _save_files(markdown, stories, title, tagline, front_page)
     print(f"\n[saved] {md_path}")
     print(f"[saved] {json_path}")
     print(f"[saved] {html_path}")
     if web_path is not None:
         print(f"[saved] {web_path}")
+
+
+def _truncate_subject(text: str, max_chars: int = _SUBJECT_MAX_CHARS) -> str:
+    """`text` cut to at most `max_chars`, at a word boundary (never
+    mid-word), with an ellipsis if it was cut."""
+    if len(text) <= max_chars:
+        return text
+    truncated = text[:max_chars].rsplit(" ", 1)[0]
+    return truncated.rstrip() + "…"
+
+
+def _build_subject(lead: dict | None, title: str, date_str: str) -> str:
+    """"<lead headline> · <date>", truncated at a word boundary to
+    _SUBJECT_MAX_CHARS - or "<title> · <date>" when there's no lead."""
+    base = lead["headline"] if lead and lead.get("headline") else title
+    subject = f"{base} · {date_str}"
+    return _truncate_subject(subject)
 
 
 def _deliver_email(markdown: str, stories: list[dict], title: str, tagline: str | None,
@@ -113,14 +131,8 @@ def _deliver_email(markdown: str, stories: list[dict], title: str, tagline: str 
         print("No new stories, email skipped")
         return
 
-    # DIGEST_WEB_BASE_URL set -> a short teaser email linking to the web
-    # edition, instead of the full layout rendered inline. Unset -> the
-    # full email, unchanged, exactly as before this existed.
-    web_base_url = os.environ.get("DIGEST_WEB_BASE_URL")
-    use_teaser = bool(web_base_url) and front_page is not None
-
-    md_path, json_path, html_path, html_content, web_path = _save_files(
-        markdown, stories, title, tagline, front_page if use_teaser else None,
+    md_path, json_path, html_path, html_content, web_path, web_html = _save_files(
+        markdown, stories, title, tagline, front_page,
     )
     print(f"[saved] {md_path}")
     print(f"[saved] {json_path}")
@@ -128,17 +140,36 @@ def _deliver_email(markdown: str, stories: list[dict], title: str, tagline: str 
     if web_path is not None:
         print(f"[saved] {web_path}")
 
-    if use_teaser and web_path is not None:
-        web_url = f"{web_base_url.rstrip('/')}/{web_path.name}"
-        text = render_teaser_text(front_page, title, web_url)
-        email_html = render_teaser_html(front_page, title, tagline, web_url)
-        subject = f"Daily digest {date.today().isoformat()}: today's front page"
+    to_addr = recipient or os.environ.get("DIGEST_TO")
+    date_str = date.today().strftime("%a %d %b")
+
+    # Publish the web edition to the PUBLIC bucket (if DIGEST_WEB_BUCKET is
+    # set) before building the email, so the email can link to it. A
+    # missing config or a failed publish both just mean no link - they
+    # must never block the email itself.
+    web_url = None
+    if web_html is not None and front_page is not None:
+        web_url = storage.publish_public_edition(
+            web_html, date.today().isoformat(),
+            recipient=to_addr, notes=str(front_page.get("notes") or ""),
+        )
+
+    mode = os.environ.get("DIGEST_EMAIL_MODE", "full")
+    lead = (front_page or {}).get("lead")
+
+    if mode == "teaser" and front_page is not None:
+        text = render_teaser_text(front_page, title, web_url or "")
+        email_html = render_teaser_html(front_page, title, tagline, web_url or "")
+    elif front_page is not None:
+        text = render_email_text(front_page, title, web_url, date_str)
+        email_html = render_email_html(front_page, title, tagline, web_url, date_str)
     else:
+        # No structured front_page - fall back to the old flat-stories
+        # layout rather than failing; should not happen in practice.
         text = render_text(stories)
         email_html = html_content
-        subject = f"Daily digest {date.today().isoformat()}: {len(stories)} stories"
 
-    to_addr = recipient or os.environ.get("DIGEST_TO")
+    subject = _build_subject(lead, title, date_str)
     msg = build_message(subject, text, email_html, to_addr)
     send(msg)  # already saved above, so a failed send loses nothing
     print("[sent] digest emailed")

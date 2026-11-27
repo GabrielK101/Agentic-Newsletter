@@ -3,7 +3,9 @@ beautifulsoup4==4.15.0
 feedparser==6.0.14
 google-cloud-storage==3.17.1
 httpx==0.28.1
+pytest==9.2.0
 pyyaml==6.0.3
 python-dotenv==1.2.3
 tavily-python==0.8.4
 trafilatura==2.2.0
+yfinance==1.8.0
